@@ -23,17 +23,19 @@ MT = AQUI / "_meshtastic"
 ENVS = {"equipa": "raidtrack-equipa", "base": "raidtrack-base"}
 
 
-def corrigir_mac_intel():
-    """Mac Intel: o cryptography >= 49 deixou de publicar pacote pré-compilado para x86_64,
-    e o PlatformIO tenta compilá-lo de raiz (precisa de Rust + OpenSSL) e falha.
-    Limita-o à última versão com pacote para Intel; o PlatformIO (uv) respeita UV_CONSTRAINT."""
-    if platform.system() != "Darwin" or platform.machine() != "x86_64":
-        return
-    c = AQUI / "_constraints-mac-intel.txt"
-    c.write_text("cryptography<49\n")  # só teto: o ESP-IDF fixa 44.0.x e o PlatformIO pede >=45; ambos têm pacote Intel
+def fixar_dependencias():
+    """Limita versões de pacotes Python que o PlatformIO instala sozinho (UV_CONSTRAINT é respeitado pelo uv).
+    - pioarduino 6.2.0.post1 anuncia-se como "6.2.0-post.1" e a plataforma ESP32 rejeita-o no fim da compilação.
+    - Mac Intel: cryptography >= 49 deixou de ter pacote pré-compilado para x86_64 (exigia Rust + OpenSSL).
+      Só se põe teto: o ESP-IDF fixa 44.0.x e o PlatformIO pede >= 45; ambos têm pacote Intel."""
+    linhas = ["pioarduino==6.2.0"]
+    if platform.system() == "Darwin" and platform.machine() == "x86_64":
+        linhas.append("cryptography<49")
+        print("Mac Intel detetado: a usar cryptography < 49 (pacote pré-compilado).")
+    c = AQUI / "_constraints.txt"
+    c.write_text("\n".join(linhas) + "\n")
     os.environ["UV_CONSTRAINT"] = str(c)
     os.environ["PIP_CONSTRAINT"] = str(c)
-    print("Mac Intel detetado: a usar cryptography < 49 (pacote pré-compilado).")
 
 
 def run(cmd, cwd=None):
@@ -50,7 +52,7 @@ def main():
 
     if sys.version_info < (3, 10):
         sys.exit(f"Python {sys.version.split()[0]} é antigo. Use Python 3.12 ou 3.13 (ex.: python3.13 compilar.py ...).")
-    corrigir_mac_intel()
+    fixar_dependencias()
 
     if not MT.exists():
         run(["git", "clone", "--depth", "1", "--branch", MESHTASTIC_REF,

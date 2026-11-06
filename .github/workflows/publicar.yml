@@ -42,12 +42,15 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ matrix.env }}-${{ env.MESHTASTIC_REF }}
+          key: pio-v2-${{ matrix.env }}-${{ env.MESHTASTIC_REF }}
 
       - name: Compilar ${{ matrix.env }}
         working-directory: mt
         run: |
-          pip install -q platformio
+          # pioarduino 6.2.0.post1 anuncia-se como "6.2.0-post.1" e a plataforma ESP32 rejeita-o (ver compilar.py)
+          echo "pioarduino==6.2.0" > "$RUNNER_TEMP/constraints.txt"
+          export UV_CONSTRAINT="$RUNNER_TEMP/constraints.txt" PIP_CONSTRAINT="$RUNNER_TEMP/constraints.txt"
+          pip install -q platformio==6.2.0
           pio run -e ${{ matrix.env }}
           mkdir -p ../out
           cp .pio/build/${{ matrix.env }}/firmware-*.factory.bin ../out/${{ matrix.env }}.factory.bin

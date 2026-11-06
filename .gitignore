@@ -4,7 +4,7 @@ dist-demo/
 __pycache__/
 .pio/
 firmware/_meshtastic/
-firmware/_constraints-*.txt
+firmware/_constraints*.txt
 app/android/
 app/ios/
 .DS_Store
