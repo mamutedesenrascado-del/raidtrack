@@ -1,0 +1,93 @@
+# Compila o firmware RaidTrack (equipa e base) e publica a app da base + o instalador
+# no GitHub Pages. Corre sozinho a cada envio para o GitHub; também pode ser lançado à mão.
+#
+# Resultado: https://<utilizador>.github.io/<repositório>/            → app da base
+#            https://<utilizador>.github.io/<repositório>/instalador.html → preparar rádios
+name: Publicar RaidTrack
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: { contents: read, pages: write, id-token: write }
+concurrency: { group: pages, cancel-in-progress: true }
+
+env:
+  MESHTASTIC_REF: v2.8.2.d5f1619
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [raidtrack-equipa, raidtrack-base]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Obter Meshtastic ${{ env.MESHTASTIC_REF }}
+        run: |
+          git clone --depth 1 --branch "$MESHTASTIC_REF" --recurse-submodules --shallow-submodules \
+            https://github.com/meshtastic/firmware.git mt
+
+      - name: Inserir módulo RaidTrack
+        run: |
+          mkdir -p mt/src/modules/optional mt/variants/raidtrack
+          cp -r firmware/RaidTrack mt/src/modules/optional/
+          cp firmware/raidtrack.ini mt/variants/raidtrack/
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ matrix.env }}-${{ env.MESHTASTIC_REF }}
+
+      - name: Compilar ${{ matrix.env }}
+        working-directory: mt
+        run: |
+          pip install -q platformio
+          pio run -e ${{ matrix.env }}
+          mkdir -p ../out
+          cp .pio/build/${{ matrix.env }}/firmware-*.factory.bin ../out/${{ matrix.env }}.factory.bin
+          ls -la ../out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.env }}
+          path: out/*.bin
+
+  app:
+    needs: firmware
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+
+      - uses: actions/download-artifact@v4
+        with: { path: app/public/firmware, merge-multiple: true }
+
+      - name: Manifesto do firmware
+        run: |
+          VER="${GITHUB_SHA::7}"
+          cat > public/firmware/manifest.json <<JSON
+          {"version":"$VER","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","meshtastic":"$MESHTASTIC_REF",
+           "files":{"equipa":"raidtrack-equipa.factory.bin","base":"raidtrack-base.factory.bin"}}
+          JSON
+          ls -la public/firmware
+
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: app/dist }
+
+  deploy:
+    needs: app
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: "${{ steps.d.outputs.page_url }}" }
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4

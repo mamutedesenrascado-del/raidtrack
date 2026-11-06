@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#14532d" />
+  <title>RaidTrack Base</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg><span>RaidTrack</span><time id="clock" title="Duração do raid">00:00</time></div>
+    <span id="status" class="pill off">Desligado</span>
+    <span id="demoTag" class="pill demo" hidden title="Equipas, posições e mensagens são inventadas">Dados fictícios</span>
+    <nav class="conn">
+      <button id="btnUsb" class="whenOff usb">Ligar USB</button>
+      <button id="btnBle" class="whenOff ble">Ligar Bluetooth</button>
+      <button id="btnDemo" class="whenOff ghost">Demonstração</button>
+      <button id="btnOff" class="whenOn ghost">Desligar</button>
+    </nav>
+    <nav class="tools">
+      <button id="btnPingAll" class="whenOn">Localizar todas</button>
+      <button id="btnFit" class="ghost" title="Mostrar todas as equipas no mapa">Ver todas</button>
+      <button id="btnBase" class="ghost" title="Marcar a posição da base">Base aqui</button>
+      <button id="btnCache" class="ghost" title="Guardar o mapa desta zona para usar sem Internet">Mapa offline</button>
+      <button id="btnExport" class="ghost">Exportar</button>
+      <button id="btnNew" class="ghost">Novo raid</button>
+      <a id="lnkSetup" class="btn ghost" href="./instalador.html" title="Gravar e configurar os rádios">Preparar rádios</a>
+    </nav>
+  </header>
+
+  <section id="sos" hidden aria-live="assertive"></section>
+  <button id="btnMute" class="mute" title="Silenciar alarme">Silenciar alarme</button>
+
+  <main>
+    <div id="map"></div>
+    <aside>
+      <div class="tabs" role="tablist">
+        <button data-tab="teams">Equipas <span id="teamCount" class="count">0</span></button>
+        <button data-tab="msgs">Mensagens</button>
+        <button data-tab="log">Registo</button>
+      </div>
+      <div class="pane" id="pane-teams"><div id="teams"></div></div>
+      <div class="pane" id="pane-msgs" hidden>
+        <div id="msgs"></div>
+        <div class="quick">
+          <button>Enviem posição</button><button>Regressem à base</button><button>Tudo bem?</button><button>Aguardem no local</button>
+        </div>
+        <form id="msgForm">
+          <select id="msgTo" aria-label="Destino"></select>
+          <input id="msgText" maxlength="200" placeholder="Mensagem…" autocomplete="off" />
+          <button type="submit" class="primary">Enviar</button>
+        </form>
+      </div>
+      <div class="pane" id="pane-log" hidden><ol id="log"></ol></div>
+    </aside>
+  </main>
+  <div id="ask" class="ask" hidden role="dialog" aria-modal="true" aria-labelledby="askText">
+    <div class="askBox">
+      <p id="askText"></p>
+      <div class="askBtns"><button id="askNo" class="ghost">Cancelar</button><button id="askOk" class="primary">Confirmar</button></div>
+    </div>
+  </div>
+  <div id="toasts"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "appId": "pt.raidtrack.base",
+  "appName": "RaidTrack",
+  "webDir": "dist",
+  "plugins": {
+    "BluetoothLe": {
+      "displayStrings": {
+        "scanning": "A procurar rádios RaidTrack…",
+        "cancel": "Cancelar",
+        "availableDevices": "Rádios disponíveis",
+        "noDeviceFound": "Nenhum rádio encontrado"
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#14532d" />
+  <title>Preparar rádios · RaidTrack</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+</head>
+<body class="inst">
+  <header class="top">
+    <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg><span>RaidTrack</span><span class="sub">Preparar rádios</span></div>
+    <nav class="tools"><a class="btn ghost" href="./index.html">App da base</a></nav>
+  </header>
+
+  <main class="instMain">
+    <div id="noSerial" class="warnBox" hidden>
+      Este browser não consegue ligar a rádios por USB. Abra esta página no <b>Google Chrome</b> ou no <b>Microsoft Edge</b>, num computador Windows ou Mac.
+    </div>
+
+    <section class="card" aria-labelledby="h1">
+      <h2 id="h1"><span class="n">1</span> Chave do raid</h2>
+      <p class="hint">Todos os rádios do mesmo raid usam a mesma chave. Quem a tiver consegue ler as posições e mensagens.</p>
+      <div class="keyRow">
+        <input id="key" class="mono" spellcheck="false" autocomplete="off" aria-label="Chave do raid" placeholder="Gere ou cole a chave do raid" />
+        <div class="btnRow">
+          <button id="keyNew">Gerar nova</button>
+          <button id="keyCopy">Copiar</button>
+          <button id="keyQrBtn">Mostrar QR</button>
+        </div>
+      </div>
+      <p id="keyMsg" class="hint"></p>
+      <div id="keyQr" class="qr" hidden><canvas id="qr" aria-label="Código QR da chave"></canvas><p class="hint">Leia com o telemóvel para passar a chave a outro computador.</p></div>
+      <label class="field"><span>Posição das equipas</span>
+        <select id="interval">
+          <option value="60">A cada 1 minuto (até ~15 equipas)</option>
+          <option value="120">A cada 2 minutos (até ~30 equipas)</option>
+          <option value="180">A cada 3 minutos (mais de 30 equipas)</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="card" aria-labelledby="h2">
+      <h2 id="h2"><span class="n">2</span> Rádio a preparar</h2>
+      <div class="seg" role="radiogroup" aria-label="Tipo de rádio">
+        <label><input type="radio" name="role" value="equipa" checked /> <span><b>Equipa</b><small>T-Beam com GPS</small></span></label>
+        <label><input type="radio" name="role" value="base" /> <span><b>Base</b><small>T3-S3 ligado à app</small></span></label>
+      </div>
+      <div id="teamFields" class="grid2">
+        <label class="field"><span>Código (máx. 4)</span><input id="code" maxlength="4" autocomplete="off" placeholder="EQ1" /></label>
+        <label class="field"><span>Nome da equipa</span><input id="name" maxlength="24" autocomplete="off" placeholder="Equipa 1 Lobos" /></label>
+      </div>
+      <div class="fw">
+        <div id="fwInfo" class="hint"></div>
+        <label class="file"><span>Ou usar um ficheiro de firmware próprio (.factory.bin):</span><input id="fwFile" type="file" accept=".bin" /></label>
+      </div>
+      <label class="check"><input id="erase" type="checkbox" checked /> Instalação nova — apaga tudo o que está no rádio</label>
+    </section>
+
+    <section class="card" aria-labelledby="h3">
+      <h2 id="h3"><span class="n">3</span> Ligar e preparar</h2>
+      <p class="hint">Ligue o rádio por USB (só um de cada vez), com a antena enroscada. O browser vai pedir para escolher a porta.</p>
+      <div class="btnRow big">
+        <button id="go" class="primary">Gravar e configurar</button>
+        <button id="cfgOnly">Só configurar</button>
+      </div>
+      <div id="run" class="run" hidden>
+        <div class="bar"><div id="barFill"></div></div>
+        <p id="runLabel" class="runLabel"></p>
+        <button id="again" class="primary" hidden>Escolher o rádio outra vez</button>
+        <details><summary>Detalhes técnicos</summary><pre id="log"></pre></details>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h4">
+      <h2 id="h4">Rádios preparados</h2>
+      <div class="tableWrap"><table>
+        <thead><tr><th>Código</th><th>Tipo</th><th>Nó</th><th>Hora</th></tr></thead>
+        <tbody id="done"></tbody>
+      </table></div>
+      <p class="hint">Depois de preparar todos, abra a <a href="./index.html">app da base</a> e ligue o rádio da base.</p>
+    </section>
+  </main>
+  <div id="toasts"></div>
+  <script type="module" src="/src/installer.ts"></script>
+</body>
+</html>
