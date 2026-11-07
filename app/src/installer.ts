@@ -2,7 +2,7 @@ import "./shims/process";
 import "./style.css";
 import QRCode from "qrcode";
 import {
-  configureRadio, downloadImage, flashFactory, keyBytes, loadManifest, newKey, pickPort, PortLostError,
+  BOARD_NAMES, configureRadio, downloadImage, flashFactory, keyBytes, loadManifest, newKey, pickPort, PortLostError, type Board,
   type FirmwareManifest, type RadioPlan, type Role,
 } from "./radio-setup";
 
@@ -97,9 +97,9 @@ const fwFile = $<HTMLInputElement>("#fwFile");
 function renderFw() {
   const f = fwFile.files?.[0];
   const el = $("#fwInfo");
-  if (f) el.innerHTML = `Firmware: <b>${f.name}</b> (ficheiro escolhido). Confirme que é o de <b>${role() === "base" ? "base" : "equipa"}</b>.`;
-  else if (manifest) el.innerHTML = `Firmware RaidTrack <b>${manifest.version}</b> de ${new Date(manifest.built).toLocaleDateString("pt-PT")}, versão <b>${role()}</b> — descarregado automaticamente.`;
-  else el.innerHTML = `Não há firmware publicado neste endereço. Escolha o ficheiro <b>${role() === "base" ? "raidtrack-base" : "raidtrack-equipa"}…factory.bin</b> ou use “Só configurar”.`;
+  if (f) el.innerHTML = `Firmware: <b>${f.name}</b> (ficheiro escolhido). O instalador confirma se serve para a placa antes de gravar.`;
+  else if (manifest) el.innerHTML = `Firmware RaidTrack <b>${manifest.version}</b> de ${new Date(manifest.built).toLocaleDateString("pt-PT")}. A placa é detetada ao ligar (${role() === "base" ? "T3-S3" : "T-Beam ou T-Beam Supreme"}) e o firmware certo é descarregado sozinho.`;
+  else el.innerHTML = `Não há firmware publicado neste endereço. Escolha um ficheiro <b>…factory.bin</b> ou use “Só configurar”.`;
   el.className = `hint ${!f && !manifest ? "bad" : ""}`;
 }
 fwFile.onchange = renderFw;
@@ -127,15 +127,20 @@ function setBusy(b: boolean) {
   document.body.classList.toggle("busy", b);
 }
 
-async function getImage(r: Role): Promise<Uint8Array> {
+async function getImage(b: Board): Promise<Uint8Array> {
   const f = fwFile.files?.[0];
   if (f) return new Uint8Array(await f.arrayBuffer());
   if (!manifest) throw new Error("Falta o ficheiro de firmware: escolha-o no passo 2.");
-  return downloadImage(manifest.files[r], progress);
+  // manifestos antigos usavam "equipa"/"base"
+  const legacy = manifest.files as Record<string, string | undefined>;
+  const file = manifest.files[b] ?? (b === "tbeam" ? legacy.equipa : b === "t3s3" ? legacy.base : undefined);
+  if (!file) throw new Error(`Ainda não há firmware publicado para ${BOARD_NAMES[b]}. Aguarde a próxima publicação. Nada foi gravado.`);
+  return downloadImage(file, progress);
 }
 
+let flashedBoard: Board | undefined;
 async function configure(port: SerialPort, p: RadioPlan) {
-  const { nodeNum } = await configureRadio(port, p, log, progress);
+  const { nodeNum } = await configureRadio(port, p, log, progress, flashedBoard);
   done.push({ code: p.code, role: p.role, node: nodeNum.toString(16), t: Date.now() });
   store.set("preparados", JSON.stringify(done));
   renderDone();
@@ -148,20 +153,17 @@ async function run(withFlash: boolean) {
   if (busy) return;
   const p = plan();
   if (!p) return;
-  let image: Uint8Array | null = null;
   if (withFlash) {
     if (!fwFile.files?.[0] && !manifest) return toast("Falta o firmware: escolha o ficheiro no passo 2 ou use “Só configurar”", "warn");
   }
   let port: SerialPort;
   try { port = await pickPort(); } catch (e) { if (!/No port selected|cancel/i.test(String(e))) toast((e as Error).message, "warn"); return; }
   lastPort = port; pendingPlan = p;
-  $("#run").hidden = false; $("#again").hidden = true; logEl.textContent = "";
+  $("#run").hidden = false; $("#again").hidden = true; logEl.textContent = ""; flashedBoard = undefined;
   setBusy(true);
   try {
     if (withFlash) {
-      image = await getImage(p.role);
-      log(`Imagem: ${(image.length / 1024).toFixed(0)} KB`);
-      await flashFactory(port, image, $<HTMLInputElement>("#erase").checked, log, progress);
+      flashedBoard = await flashFactory(port, p.role, getImage, $<HTMLInputElement>("#erase").checked, log, progress);
       progress(100, "Firmware gravado. A aguardar o primeiro arranque (até 30 s)…");
       await new Promise((r) => setTimeout(r, 6000)); // primeiro arranque: formata a memória interna
     }

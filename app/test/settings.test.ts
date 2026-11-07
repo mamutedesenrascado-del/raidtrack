@@ -7,7 +7,7 @@ import { buildSettings, keyBytes, newKey } from "../src/radio-setup";
 const psk = keyBytes(newKey())!;
 let n = 0;
 for (const role of ["equipa", "base"] as const) {
-  const s = buildSettings({ role, code: role === "base" ? "BASE" : "EQ1", name: "Equipa 1", pskB64: "", positionSecs: 120 }, psk);
+  const s = buildSettings({ role, code: role === "base" ? "BASE" : "EQ1", name: "Equipa 1", pskB64: "", positionSecs: 120 }, psk, role === "base" ? "t3s3" : "supreme");
   for (const [label, x] of s) {
     // Mensagem Admin completa, como o rádio a recebe
     const variant = { owner: "setOwner", config: "setConfig", module: "setModuleConfig", canned: "setCannedMessageModuleMessages", channel: "setChannel" }[x.kind];

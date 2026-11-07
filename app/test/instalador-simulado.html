@@ -6,7 +6,7 @@ import { configureRadio, newKey } from "../src/radio-setup";
 const logs = [];
 const t0 = Date.now();
 try {
-  const r = await configureRadio(firstPort, { role: "base", code: "BASE", name: "RaidTrack Base", pskB64: newKey(), positionSecs: 60 },
+  const r = await configureRadio(firstPort, { role: "equipa", code: "EQ1", name: "Equipa 1", pskB64: newKey(), positionSecs: 60 },
     (m) => logs.push(m), (p, l) => logs.push(`[${p}%] ${l}`));
   window.__res = { ok: true, node: r.nodeNum.toString(16), state, received, logs, secs: (Date.now() - t0) / 1000 };
 } catch (e) {

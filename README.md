@@ -23,17 +23,17 @@ Base: Meshtastic **v2.8.2.d5f1619** (estável). O módulo entra pelo mecanismo o
 
 ---
 
-## 1. Hardware das equipas (T-Beam V1.2)
+## 1. Hardware das equipas (T-Beam V1.x ou T-Beam Supreme)
 
-Botões entre o GPIO e GND (o firmware ativa o pull-up interno):
+Botões entre o GPIO e GND (o firmware ativa o pull-up interno). O instalador deteta a placa e usa os pinos certos.
 
-| Botão | GPIO |
-|---|---|
-| SOS — 12 mm, vermelho | 14 |
-| Cima | 25 |
-| Baixo | 13 |
-| OK | 15 |
-| Besouro ativo 3,3 V (opcional, + ao GPIO, − ao GND) | 2 |
+| Botão | T-Beam V1.x (ESP32) | T-Beam Supreme (ESP32-S3) |
+|---|---|---|
+| SOS — 12 mm, vermelho | 14 | 38 |
+| Cima | 25 | 39 |
+| Baixo | 13 | 21 |
+| OK | 15 | 48 |
+| Besouro ativo 3,3 V (opcional, + ao GPIO, − ao GND) | 2 | 2 |
 
 SOS: **premir 2 s** dispara (3 bips, ecrã "SOS ENVIADO"); repete a cada 30 s até a base confirmar (bip longo, "BASE RECEBEU O SOS"). **Premir 5 s** com SOS ativo cancela.
 

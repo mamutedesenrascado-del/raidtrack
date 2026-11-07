@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [raidtrack-equipa, raidtrack-base]
+        env: [raidtrack-equipa, raidtrack-equipa-supreme, raidtrack-base]
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +78,7 @@ jobs:
           VER="${GITHUB_SHA::7}"
           cat > public/firmware/manifest.json <<JSON
           {"version":"$VER","built":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","meshtastic":"$MESHTASTIC_REF",
-           "files":{"equipa":"raidtrack-equipa.factory.bin","base":"raidtrack-base.factory.bin"}}
+           "files":{"tbeam":"raidtrack-equipa.factory.bin","supreme":"raidtrack-equipa-supreme.factory.bin","t3s3":"raidtrack-base.factory.bin"}}
           JSON
           ls -la public/firmware
 

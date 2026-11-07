@@ -6,6 +6,10 @@ import { TransportWebSerial } from "@meshtastic/transport-web-serial";
 import { ESPLoader, Transport } from "esptool-js";
 
 export type Role = "base" | "equipa";
+/** Placas suportadas. A placa é detetada sozinha (chip e tamanho da memória, ou modelo indicado pelo rádio). */
+export type Board = "tbeam" | "supreme" | "t3s3";
+export const BOARD_NAMES: Record<Board, string> = { tbeam: "T-Beam (ESP32)", supreme: "T-Beam Supreme (ESP32-S3)", t3s3: "T3-S3" };
+export const BOARD_ROLE: Record<Board, Role> = { tbeam: "equipa", supreme: "equipa", t3s3: "base" };
 
 export interface RadioPlan {
   role: Role;
@@ -21,8 +25,11 @@ export const MENSAGENS = [
   "Tudo bem", "Chegamos ao posto", "Saimos do posto", "A regressar a base",
   "Precisamos de agua", "Ferido ligeiro", "Estamos perdidos", "Pedimos contacto",
 ];
-// Botões do T-Beam (ver docs/PROTOCOLO.md)
-const PIN_UP = 25, PIN_DOWN = 13, PIN_OK = 15;
+// Botões cima/baixo/OK de cada placa de equipa (ver docs/PROTOCOLO.md)
+const NAV_PINS: Record<"tbeam" | "supreme", { up: number; down: number; ok: number }> = {
+  tbeam: { up: 25, down: 13, ok: 15 },
+  supreme: { up: 39, down: 21, ok: 48 },
+};
 
 type Log = (msg: string) => void;
 type Progress = (pct: number, label: string) => void;
@@ -61,19 +68,39 @@ export function imageChipId(img: Uint8Array): number | null {
   return null;
 }
 
-export async function flashFactory(port: SerialPort, image: Uint8Array, eraseAll: boolean, log: Log, progress: Progress) {
+/**
+ * Liga em modo de gravação, identifica a placa, pede a imagem certa para ela e grava-a.
+ * `getImage` recebe a placa detetada; o papel pedido (base/equipa) tem de bater certo com a placa.
+ */
+export async function flashFactory(port: SerialPort, role: Role, getImage: (b: Board) => Promise<Uint8Array>, eraseAll: boolean, log: Log, progress: Progress): Promise<Board> {
   const transport = new Transport(port, false);
   const terminal = { clean() {}, writeLine: (d: string) => log(d), write: (d: string) => log(d) };
   const esp = new ESPLoader({ transport, baudrate: 460800, terminal, debugLogging: false });
+  let board: Board;
   try {
     progress(2, "A ligar ao rádio…");
     const chip = await esp.main();
     log(`Chip detetado: ${chip}`);
-    // Recusa gravar um firmware feito para outro chip (ex.: firmware de T-Beam ESP32 numa placa ESP32-S3)
-    const want = imageChipId(image), have = (esp.chip as unknown as { IMAGE_CHIP_ID?: number }).IMAGE_CHIP_ID;
+    const have = (esp.chip as unknown as { IMAGE_CHIP_ID?: number }).IMAGE_CHIP_ID;
+    if (have === 0) board = "tbeam";
+    else if (have === 9) {
+      // T3-S3: 4 MB de memória interna; T-Beam Supreme: 8 MB
+      const sizeCode = ((await esp.readFlashId()) >> 16) & 0xff;
+      log(`Memória flash: ${sizeCode >= 0x17 ? "8 MB ou mais" : "4 MB"}`);
+      board = sizeCode >= 0x17 ? "supreme" : "t3s3";
+    } else throw new Error(`Placa não suportada (${chip}). Nada foi gravado.`);
+    log(`Placa: ${BOARD_NAMES[board]}`);
+    if (BOARD_ROLE[board] !== role) {
+      throw new Error(`A placa ligada é um ${BOARD_NAMES[board]}, que no RaidTrack é ${BOARD_ROLE[board] === "base" ? "a Base" : "uma Equipa"}, ` +
+        `mas escolheu “${role === "base" ? "Base" : "Equipa"}”. Mude a escolha no passo 2. Nada foi gravado.`);
+    }
+    const image = await getImage(board);
+    log(`Imagem: ${(image.length / 1024).toFixed(0)} KB`);
+    // Recusa gravar um firmware feito para outro chip (ex.: ficheiro escolhido à mão errado)
+    const want = imageChipId(image);
     if (want !== null && have !== undefined && want !== have) {
       throw new Error(`Este firmware é para ${CHIP_NAMES[want] ?? want}, mas a placa ligada tem ${CHIP_NAMES[have] ?? chip}. ` +
-        `Confirme que escolheu o tipo certo (Equipa = T-Beam ESP32, Base = T3-S3). Nada foi gravado.`);
+        `Confirme o ficheiro de firmware. Nada foi gravado.`);
     }
     if (eraseAll) {
       progress(5, "A apagar a memória (até 1 minuto)…");
@@ -92,6 +119,7 @@ export async function flashFactory(port: SerialPort, image: Uint8Array, eraseAll
     try { await transport.disconnect(); } catch { /* já fechado */ }
   }
   progress(100, "Firmware gravado");
+  return board;
 }
 
 // ───────────────────────── Configuração ─────────────────────────
@@ -107,7 +135,8 @@ export type Setting =
   | { kind: "channel"; msg: Protobuf.Channel.Channel };
 
 /** Toda a configuração de um rádio, como mensagens prontas a enviar (função pura, testável sem rádio) */
-export function buildSettings(plan: RadioPlan, psk: Uint8Array): [string, Setting][] {
+export function buildSettings(plan: RadioPlan, psk: Uint8Array, board: Board = "tbeam"): [string, Setting][] {
+  const pins = NAV_PINS[board === "supreme" ? "supreme" : "tbeam"];
   const C = Protobuf.Config, M = Protobuf.ModuleConfig;
   // A primeira alteração de config abre a transação de edição: tudo o resto fica pendente até ao commit (um só reinício)
   const out: [string, Setting][] = [
@@ -125,7 +154,7 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array): [string, Settin
         gpsMode: C.Config_PositionConfig_GpsMode.ENABLED, gpsUpdateInterval: Math.min(30, plan.positionSecs),
         positionBroadcastSecs: plan.positionSecs, positionBroadcastSmartEnabled: false, fixedPosition: false }) }) }],
       ["Botões", { kind: "module", msg: mod({ case: "cannedMessage", value: create(M.ModuleConfig_CannedMessageConfigSchema, {
-        enabled: true, updown1Enabled: true, inputbrokerPinA: PIN_UP, inputbrokerPinB: PIN_DOWN, inputbrokerPinPress: PIN_OK,
+        enabled: true, updown1Enabled: true, inputbrokerPinA: pins.up, inputbrokerPinB: pins.down, inputbrokerPinPress: pins.ok,
         allowInputSource: "updown1", sendBell: false }) }) }],
       ["Mensagens pré-definidas", { kind: "canned", msg: create(Protobuf.CannedMessages.CannedMessageModuleConfigSchema, { messages: MENSAGENS.join("|") }) }],
     );
@@ -143,7 +172,7 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array): [string, Settin
 }
 
 // ── Sessão com o rádio ──
-interface Session { port: SerialPort; transport: TransportWebSerial; dev: MeshDevice; nodeNum: number; region: number }
+interface Session { port: SerialPort; transport: TransportWebSerial; dev: MeshDevice; nodeNum: number; region: number; hwModel: number }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
@@ -171,19 +200,21 @@ async function closeSession(s: Session | null) {
 async function openSession(port: SerialPort, ms: number): Promise<Session> {
   const transport = await TransportWebSerial.createFromPort(port, 115200);
   const dev = new MeshDevice(transport);
-  let nodeNum = 0, region = 0;
+  let nodeNum = 0, region = 0, hwModel = 0;
+  dev.events.onDeviceMetadataPacket?.subscribe((m) => { if (m.data.hwModel) hwModel = m.data.hwModel; });
+  dev.events.onNodeInfoPacket.subscribe((n) => { if (n.num === nodeNum && n.user?.hwModel) hwModel = n.user.hwModel; });
   dev.events.onMyNodeInfo.subscribe((m) => (nodeNum = m.myNodeNum));
   dev.events.onConfigPacket.subscribe((c) => { if (c.payloadVariant.case === "lora") region = c.payloadVariant.value.region; });
   const configured = new Promise<void>((resolve) => dev.events.onDeviceStatus.subscribe((st) => { if (st === Types.DeviceStatusEnum.DeviceConfigured) resolve(); }));
   void dev.configure().catch(() => {});
-  const s: Session = { port, transport, dev, nodeNum: 0, region: 0 };
+  const s: Session = { port, transport, dev, nodeNum: 0, region: 0, hwModel: 0 };
   try {
     await withTimeout(configured, ms, "Ligação");
   } catch (e) {
     await closeSession(s);
     throw e;
   }
-  s.nodeNum = nodeNum; s.region = region;
+  s.nodeNum = nodeNum; s.region = region; s.hwModel = hwModel;
   return s;
 }
 
@@ -212,10 +243,12 @@ export class PortLostError extends Error {
   constructor() { super("Não encontrei o rádio depois de reiniciar. Escolha a porta outra vez."); }
 }
 
-export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log, progress: Progress): Promise<{ nodeNum: number; port: SerialPort }> {
+const HW_BOARD: Record<number, Board> = { 4: "tbeam", 12: "supreme", 16: "t3s3" };
+
+export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log, progress: Progress, boardHint?: Board): Promise<{ nodeNum: number; port: SerialPort; board: Board }> {
   const psk = keyBytes(plan.pskB64);
   if (!psk) throw new Error("A chave do raid não é válida.");
-  const settings = buildSettings(plan, psk);
+  let settings = buildSettings(plan, psk);
   const lora = settings.find(([, x]) => x.kind === "config" && x.msg.payloadVariant.case === "lora")![1] as Extract<Setting, { kind: "config" }>;
   const EU868 = Protobuf.Config.Config_LoRaConfig_RegionCode.EU_868;
 
@@ -239,6 +272,12 @@ export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log
       if (s.region !== EU868) throw new Error("A região não ficou gravada. Tente “Só configurar” outra vez.");
     }
 
+    const board = HW_BOARD[s.hwModel] ?? boardHint ?? (plan.role === "base" ? "t3s3" : "tbeam");
+    log(`Placa: ${BOARD_NAMES[board]}${HW_BOARD[s.hwModel] ? "" : " (presumida)"}`);
+    if (BOARD_ROLE[board] !== plan.role) {
+      throw new Error(`O rádio ligado é um ${BOARD_NAMES[board]}, que no RaidTrack é ${BOARD_ROLE[board] === "base" ? "a Base" : "uma Equipa"}. Mude a escolha no passo 2.`);
+    }
+    settings = buildSettings(plan, psk, board);
     for (let i = 0; i < settings.length; i++) {
       const [label, x] = settings[i];
       progress(30 + Math.round((i / settings.length) * 60), `A configurar: ${label}…`);
@@ -261,14 +300,14 @@ export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log
     log("✓ Configuração guardada; o rádio vai reiniciar");
     await sleep(1500);
     progress(100, "Configurado");
-    return { nodeNum: s.nodeNum, port: s.port };
+    return { nodeNum: s.nodeNum, port: s.port, board };
   } finally {
     await closeSession(s);
   }
 }
 
 /** Lê a imagem de firmware publicada com a app (GitHub Pages) */
-export interface FirmwareManifest { version: string; built: string; files: Record<Role, string> }
+export interface FirmwareManifest { version: string; built: string; files: Partial<Record<Board, string>> }
 export async function loadManifest(): Promise<FirmwareManifest | null> {
   try {
     const r = await fetch("./firmware/manifest.json", { cache: "no-cache" });

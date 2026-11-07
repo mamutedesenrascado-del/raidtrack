@@ -20,7 +20,7 @@ from pathlib import Path
 MESHTASTIC_REF = "v2.8.2.d5f1619"
 AQUI = Path(__file__).resolve().parent
 MT = AQUI / "_meshtastic"
-ENVS = {"equipa": "raidtrack-equipa", "base": "raidtrack-base"}
+ENVS = {"equipa": "raidtrack-equipa", "equipa-supreme": "raidtrack-equipa-supreme", "base": "raidtrack-base"}
 
 
 def fixar_dependencias():

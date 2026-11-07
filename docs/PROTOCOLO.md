@@ -55,17 +55,19 @@ Todas as mensagens começam com um cabeçalho de 3 bytes. Inteiros em little-end
 
 Sem payload (3 bytes). A equipa responde de imediato com a sua posição (`POSITION_APP`). Botão **"Localizar agora"** na app.
 
-## Botões do tracker (T-Beam)
+## Botões do tracker
 
-| Botão | GPIO | Função |
-|---|---|---|
-| SOS (12 mm, vermelho) | 14 | Premir 2 s → SOS. Premir 5 s com SOS ativo → cancela |
-| Cima | 25 | Navegar mensagens pré-definidas |
-| Baixo | 13 | Navegar |
-| OK | 15 | Enviar mensagem selecionada / confirmar |
-| Besouro ativo (opcional) | 2 | Aviso sonoro de SOS e de mensagens |
+Cada botão liga entre o GPIO e GND (pull-up interno). O instalador escolhe os pinos certos para a placa detetada.
 
-Todos os botões ligam entre o GPIO e GND (pull-up interno).
+| Botão | T-Beam V1.x (ESP32) | T-Beam Supreme (ESP32-S3) | Função |
+|---|---|---|---|
+| SOS (12 mm, vermelho) | 14 | 38 | Premir 2 s → SOS. Premir 5 s com SOS ativo → cancela |
+| Cima | 25 | 39 | Navegar mensagens pré-definidas |
+| Baixo | 13 | 21 | Navegar |
+| OK | 15 | 48 | Enviar mensagem selecionada / confirmar |
+| Besouro ativo 3,3 V (opcional) | 2 | 2 | Aviso sonoro de SOS e de mensagens |
+
+No T-Beam Supreme, os pinos 38, 39, 21, 48 e 2 estão no conector de expansão de 2×13 pinos.
 
 ## Orçamento de tempo de antena (EU868, 869,525 MHz, ciclo de trabalho 10 %)
 

@@ -6,7 +6,7 @@ import { Protobuf } from "@meshtastic/core";
 const M = Protobuf.Mesh, A = Protobuf.Admin, C = Protobuf.Config;
 
 export const received: string[] = [];
-export const state = { nodeNum: 0x924113d8, region: 0, reboots: 0, owner: "", channelName: "", committed: false };
+export const state = { hwModel: 12, nodeNum: 0x924113d8, region: 0, reboots: 0, owner: "", channelName: "", committed: false };
 let tx = false;
 const listeners: Record<string, ((e: { port: unknown }) => void)[]> = { connect: [], disconnect: [] };
 let current: FakePort;
@@ -57,6 +57,7 @@ class FakePort {
     if (v.case === "wantConfigId") {
       this.send({ payloadVariant: { case: "myInfo", value: create(M.MyNodeInfoSchema, { myNodeNum: state.nodeNum }) } });
       this.send({ payloadVariant: { case: "config", value: create(C.ConfigSchema, { payloadVariant: { case: "lora", value: create(C.Config_LoRaConfigSchema, { region: state.region }) } }) } });
+      this.send({ payloadVariant: { case: "nodeInfo", value: create(M.NodeInfoSchema, { num: state.nodeNum, user: create(M.UserSchema, { hwModel: state.hwModel }) }) } });
       this.send({ payloadVariant: { case: "configCompleteId", value: v.value } });
       return;
     }
@@ -65,7 +66,7 @@ class FakePort {
     if (p.to !== state.nodeNum) { received.push(`IGNORADO (para nó antigo ${p.to.toString(16)})`); return; }
     if (d.portnum !== 6) return;
     const a = fromBinary(A.AdminMessageSchema, d.payload).payloadVariant;
-    received.push(`${a.case}${a.case === "setConfig" ? ":" + a.value.payloadVariant.case : ""}${tx ? " [tx]" : ""}`);
+    received.push(`${a.case}${a.case === "setConfig" ? ":" + a.value.payloadVariant.case : ""}${a.case === "setModuleConfig" && a.value.payloadVariant.case === "cannedMessage" ? ` pinos ${a.value.payloadVariant.value.inputbrokerPinA}/${a.value.payloadVariant.value.inputbrokerPinB}/${a.value.payloadVariant.value.inputbrokerPinPress}` : ""}${tx ? " [tx]" : ""}`);
     this.ack(p);
     if (a.case === "beginEditSettings") tx = true;
     if (a.case === "setOwner") state.owner = a.value.shortName;
