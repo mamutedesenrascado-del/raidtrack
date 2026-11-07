@@ -6,7 +6,7 @@ import { Protobuf } from "@meshtastic/core";
 const M = Protobuf.Mesh, A = Protobuf.Admin, C = Protobuf.Config;
 
 export const received: string[] = [];
-export const state = { hwModel: 12, nodeNum: 0x924113d8, region: 0, reboots: 0, owner: "", channelName: "", committed: false };
+export const state = { precision: -1, hwModel: 12, nodeNum: 0x924113d8, region: 0, reboots: 0, owner: "", channelName: "", committed: false };
 let tx = false;
 const listeners: Record<string, ((e: { port: unknown }) => void)[]> = { connect: [], disconnect: [] };
 let current: FakePort;
@@ -70,7 +70,7 @@ class FakePort {
     this.ack(p);
     if (a.case === "beginEditSettings") tx = true;
     if (a.case === "setOwner") state.owner = a.value.shortName;
-    if (a.case === "setChannel") state.channelName = a.value.settings?.name ?? "";
+    if (a.case === "setChannel") { state.channelName = a.value.settings?.name ?? ""; state.precision = a.value.settings?.moduleSettings?.positionPrecision ?? 0; }
     if (a.case === "setConfig" && a.value.payloadVariant.case === "lora") {
       const first = state.region === 0 && a.value.payloadVariant.value.region !== 0;
       state.region = a.value.payloadVariant.value.region;

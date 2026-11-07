@@ -167,7 +167,9 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array, board: Board = "
   }
   out.push(["Canal cifrado", { kind: "channel", msg: create(Protobuf.Channel.ChannelSchema, {
     index: 0, role: Protobuf.Channel.Channel_Role.PRIMARY,
-    settings: create(Protobuf.Channel.ChannelSettingsSchema, { name: CANAL, psk }) }) }]);
+    // positionPrecision 32 = posição exata. Sem isto o Meshtastic 2.8 não partilha a posição neste canal (precisão 0).
+    settings: create(Protobuf.Channel.ChannelSettingsSchema, { name: CANAL, psk,
+      moduleSettings: create(Protobuf.Channel.ModuleSettingsSchema, { positionPrecision: 32 }) }) }) }]);
   return out;
 }
 

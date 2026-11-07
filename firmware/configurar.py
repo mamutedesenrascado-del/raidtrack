@@ -88,7 +88,9 @@ def sets(pares):
 
 
 def canal(porta, chave):
-    cli(porta, "--ch-index", "0", "--ch-set", "name", CANAL, "--ch-set", "psk", f"base64:{chave}")
+    cli(porta, "--ch-index", "0", "--ch-set", "name", CANAL, "--ch-set", "psk", f"base64:{chave}",
+        # Sem isto o Meshtastic 2.8 não partilha a posição no canal (precisão 0 = desligado)
+        "--ch-set", "module_settings.position_precision", "32")
 
 
 def main():
