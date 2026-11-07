@@ -653,13 +653,16 @@ async function makeReport() {
   btn.disabled = true; btn.textContent = "A gerar…";
   try {
     const { buildReport } = await import("./report");
-    const pdf = await buildReport(raid, teams(), teamStats, (m) => (btn.textContent = m));
-    const url = URL.createObjectURL(pdf);
+    const rep = await buildReport(raid, teams(), teamStats, (m) => (btn.textContent = m), DEMO_BUILD);
     if (DEMO_BUILD) {
-      // a página de demonstração não descarrega ficheiros: mostra o PDF numa janela por cima
-      $<HTMLIFrameElement>("#pdfFrame").src = url;
+      // a página de demonstração não descarrega nem mostra PDF: pré-visualização do conteúdo
+      $("#pdfBody").innerHTML = `<p class="muted">Na app real, isto é descarregado como PDF (${rep.pages} páginas). Mapas sem fundo nesta demonstração: com Internet levam o mapa OpenStreetMap.</p>
+        <div class="tblWrap"><table><thead><tr>${rep.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+        <tbody>${rep.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        ${rep.maps.map((m) => `<figure><img src="${m.img}" alt="Mapa: ${esc(m.title)}" /><figcaption>${esc(m.title)}</figcaption></figure>`).join("")}`;
       $("#pdfView").hidden = false;
     } else {
+      const url = URL.createObjectURL(rep.pdf);
       const a = document.createElement("a");
       a.href = url; a.download = `${fileBase()}-relatorio.pdf`; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
@@ -768,7 +771,7 @@ $("#zoneList").addEventListener("click", (e) => {
 });
 $("#btnGpx").onclick = saveGpx;
 $("#btnReport").onclick = () => void makeReport();
-$("#pdfClose").onclick = () => { $("#pdfView").hidden = true; const f = $<HTMLIFrameElement>("#pdfFrame"); URL.revokeObjectURL(f.src); f.src = "about:blank"; };
+$("#pdfClose").onclick = () => { $("#pdfView").hidden = true; $("#pdfBody").innerHTML = ""; };
 
 // Relógio do raid e envelhecimento dos estados
 setInterval(() => {

@@ -31,6 +31,7 @@ interface MapLayers {
   tracks: { color: string; pts: LatLon[]; label?: string; main?: boolean }[];
 }
 
+let offline = false; // demonstração: não pede mosaicos (não há Internet dentro da página)
 async function drawMap(w: number, h: number, L: MapLayers): Promise<string> {
   const all: LatLon[] = [...(L.route ?? []), ...L.tracks.flatMap((t) => t.pts), ...(L.zones ?? []).flatMap((z) => z.poly)];
   const c = document.createElement("canvas");
@@ -60,6 +61,7 @@ async function drawMap(w: number, h: number, L: MapLayers): Promise<string> {
   let ok = 0, total = 0;
   for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) {
     total++;
+    if (offline) continue;
     jobs.push(loadTile(z, x, y).then((img) => { if (img) { ok++; g.drawImage(img, x * TILE - ox, y * TILE - oy); } }));
   }
   await Promise.all(jobs);
@@ -147,7 +149,10 @@ const eventsOf = (t: Team, log: LogEv[]) => {
   return log.filter((e) => re.test(e.text));
 };
 
-export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, progress: (m: string) => void): Promise<Blob> {
+export interface Report { pdf: Blob; pages: number; head: string[]; rows: string[][]; maps: { title: string; img: string }[] }
+export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, progress: (m: string) => void, noTiles = false): Promise<Report> {
+  offline = noTiles;
+  const maps: Report["maps"] = [], rows: string[][] = [];
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const W = 210, M = 14;
   const title = raid.name || "Raid";
@@ -197,6 +202,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
     route: route?.pts, wpts: route?.wpts, zones,
     tracks: list.map((t) => ({ color: t.color, pts: stats.get(t.num)!.track.map((p) => [p[0], p[1]] as LatLon), label: t.short })),
   });
+  maps.push({ title: "Todas as equipas", img: overview });
   const mh = ((W - 2 * M) * 860) / 1400;
   doc.addImage(overview, "JPEG", M, y, W - 2 * M, mh); y += mh + 4;
   // legenda
@@ -235,6 +241,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
       ...(route ? [pct(st.adh?.onRoutePct), pct(st.adh?.coveragePct)] : []),
       String(zoneIn), sos ? `${sos}` : "0",
     ];
+    rows.push(cells);
     if (y > 280) { doc.addPage(); header("Relatório final (cont.)"); y = 32; row(cols.map((c) => c[0]), true, [229, 231, 235]); }
     row(cells, false, i % 2 ? [249, 250, 251] : undefined);
   });
@@ -276,6 +283,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
       route: route?.pts, wpts: route?.wpts, zones,
       tracks: [{ color: t.color, pts: st.track.map((p) => [p[0], p[1]] as LatLon), main: true }],
     });
+    maps.push({ title: `${t.short}${t.long ? ` — ${t.long}` : ""}`, img });
     const ih = ((W - 2 * M) * 1000) / 1400;
     doc.addImage(img, "JPEG", M, y, W - 2 * M, ih); y += ih + 3;
     doc.setFontSize(7.5); doc.setTextColor(107, 114, 128);
@@ -298,7 +306,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
   }
   footer();
   progress("A terminar…");
-  return doc.output("blob");
+  return { pdf: doc.output("blob"), pages: doc.getNumberOfPages(), head: cols.map((c) => c[0]), rows, maps };
 }
 
 function hex(c: string): [number, number, number] {

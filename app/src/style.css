@@ -246,4 +246,11 @@ body.drawing .leaflet-interactive { pointer-events: none; }
 .pdfView { position: fixed; inset: 0; z-index: 1300; background: rgb(0 0 0 / .55); display: grid; place-items: center; padding: 16px; }
 .pdfBox { width: min(900px, 100%); height: min(92vh, 1200px); background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
 .pdfBar { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.pdfBox iframe { flex: 1; border: 0; width: 100%; background: #525659; }
+.pdfBody { flex: 1; overflow: auto; padding: 12px 16px 20px; }
+.pdfBody > * + * { margin-top: 14px; }
+.tblWrap { overflow-x: auto; }
+.pdfBody table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.pdfBody th, .pdfBody td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.pdfBody th { background: var(--bg); font-size: 12px; }
+.pdfBody figure { margin: 0; } .pdfBody img { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+.pdfBody figcaption { font-size: 13px; font-weight: 600; margin-top: 4px; }
