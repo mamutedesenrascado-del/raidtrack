@@ -30,6 +30,7 @@ const KEY = "raidtrack.raid.v1";
 
 let raid: Raid = (DEMO_BUILD ? null : load()) ?? { started: Date.now(), teams: {}, msgs: [], log: [] };
 let link: Link | null = null;
+let linkKind = ""; // conhecido antes de a ligação terminar (o estado "ligado" chega antes de connectRadio devolver)
 let myNum = 0;
 let status: LinkStatus = "desligado";
 let selected: number | null = null;
@@ -204,7 +205,7 @@ function renderLog() {
 function renderStatus(detail?: string) {
   const el = $("#status");
   el.className = `pill ${status === "ligado" ? "on" : status === "a ligar" ? "wait" : "off"}`;
-  el.textContent = status === "ligado" ? `Ligado · ${link?.kind}` : status === "a ligar" ? detail ?? "A ligar…" : "Desligado";
+  el.textContent = status === "ligado" ? `Ligado · ${link?.kind ?? linkKind}` : status === "a ligar" ? detail ?? "A ligar…" : "Desligado";
   document.body.classList.toggle("connected", status === "ligado");
 }
 
@@ -252,7 +253,7 @@ function alarm(on: boolean) {
 const events: LinkEvents = {
   status(s, d) {
     const was = status; status = s; renderStatus(d);
-    if (s !== was && s !== "a ligar") log("ligacao", s === "ligado" ? `Rádio ligado (${link?.kind ?? ""})` : "Rádio desligado");
+    if (s !== was && s !== "a ligar") log("ligacao", s === "ligado" ? `Rádio ligado (${link?.kind ?? linkKind})` : "Rádio desligado");
   },
   myNode(n) { myNum = n; renderTeams(); },
   node(n, short, long) {
@@ -326,6 +327,7 @@ async function sendAck(t: Team, resend = false) {
 async function connect(how: "usb" | "ble" | "demo") {
   if (link) await link.disconnect();
   try {
+    linkKind = how === "usb" ? "USB" : how === "ble" ? "Bluetooth" : "Simulação";
     link = how === "demo" ? startSim(events) : await connectRadio(how, events);
     if (how === "demo") toast("Demonstração: 5 equipas fictícias. A EQ2 envia um SOS ao fim de 25 s.");
   } catch (e) {
