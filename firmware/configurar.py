@@ -42,6 +42,7 @@ COMUM = [
     "lora.hop_limit", "3",
     "device.role", "CLIENT",
     "telemetry.device_update_interval", "300",
+    "telemetry.device_telemetry_enabled", "true",  # 2.8: sem isto a bateria não é enviada para a base
 ]
 
 EQUIPA = [

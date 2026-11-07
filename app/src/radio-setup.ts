@@ -124,6 +124,19 @@ export async function flashFactory(port: SerialPort, role: Role, getImage: (b: B
 
 // ───────────────────────── Configuração ─────────────────────────
 
+/**
+ * Bateria das equipas: no Meshtastic 2.8 o envio da telemetria do dispositivo para a rede é opcional
+ * (campo 14, device_telemetry_enabled, desligado por omissão). A biblioteca JS ainda não conhece esse campo,
+ * por isso vai como campo "desconhecido" — o rádio lê-o normalmente.
+ */
+function telemetryConfig(intervalSecs: number) {
+  const t = create(Protobuf.ModuleConfig.ModuleConfig_TelemetryConfigSchema, { deviceUpdateInterval: intervalSecs });
+  (t as unknown as { $unknown: { no: number; wireType: number; data: Uint8Array }[] }).$unknown = [
+    { no: 14, wireType: 0 /* varint */, data: new Uint8Array([1]) },
+  ];
+  return t;
+}
+
 const cfg = (c: Protobuf.Config.Config["payloadVariant"]) => create(Protobuf.Config.ConfigSchema, { payloadVariant: c });
 const mod = (c: Protobuf.ModuleConfig.ModuleConfig["payloadVariant"]) => create(Protobuf.ModuleConfig.ModuleConfigSchema, { payloadVariant: c });
 
@@ -146,7 +159,7 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array, board: Board = "
       usePreset: true, region: C.Config_LoRaConfig_RegionCode.EU_868, modemPreset: C.Config_LoRaConfig_ModemPreset.LONG_FAST,
       hopLimit: 3, txEnabled: true }) }) }],
     ["Ecrã", { kind: "config", msg: cfg({ case: "display", value: create(C.Config_DisplayConfigSchema, { screenOnSecs: 86400 }) }) }],
-    ["Telemetria", { kind: "module", msg: mod({ case: "telemetry", value: create(M.ModuleConfig_TelemetryConfigSchema, { deviceUpdateInterval: 300 }) }) }],
+    ["Telemetria", { kind: "module", msg: mod({ case: "telemetry", value: telemetryConfig(300) }) }],
   ];
   if (plan.role === "equipa") {
     out.push(
