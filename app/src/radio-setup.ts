@@ -52,6 +52,15 @@ export async function pickPort(): Promise<SerialPort> {
  * Grava a imagem completa (`.factory.bin`, endereço 0x0).
  * eraseAll=true apaga tudo antes (instalação nova); false mantém a configuração (atualização).
  */
+const CHIP_NAMES: Record<number, string> = { 0: "ESP32", 2: "ESP32-S2", 5: "ESP32-C3", 9: "ESP32-S3", 13: "ESP32-C6", 16: "ESP32-H2" };
+/** Lê o identificador de chip do cabeçalho do bootloader dentro da imagem (.factory.bin) */
+export function imageChipId(img: Uint8Array): number | null {
+  for (const off of [0x0, 0x1000]) {
+    if (img.length > off + 24 && img[off] === 0xe9) return img[off + 12] | (img[off + 13] << 8);
+  }
+  return null;
+}
+
 export async function flashFactory(port: SerialPort, image: Uint8Array, eraseAll: boolean, log: Log, progress: Progress) {
   const transport = new Transport(port, false);
   const terminal = { clean() {}, writeLine: (d: string) => log(d), write: (d: string) => log(d) };
@@ -60,6 +69,12 @@ export async function flashFactory(port: SerialPort, image: Uint8Array, eraseAll
     progress(2, "A ligar ao rádio…");
     const chip = await esp.main();
     log(`Chip detetado: ${chip}`);
+    // Recusa gravar um firmware feito para outro chip (ex.: firmware de T-Beam ESP32 numa placa ESP32-S3)
+    const want = imageChipId(image), have = (esp.chip as unknown as { IMAGE_CHIP_ID?: number }).IMAGE_CHIP_ID;
+    if (want !== null && have !== undefined && want !== have) {
+      throw new Error(`Este firmware é para ${CHIP_NAMES[want] ?? want}, mas a placa ligada tem ${CHIP_NAMES[have] ?? chip}. ` +
+        `Confirme que escolheu o tipo certo (Equipa = T-Beam ESP32, Base = T3-S3). Nada foi gravado.`);
+    }
     if (eraseAll) {
       progress(5, "A apagar a memória (até 1 minuto)…");
       await esp.eraseFlash();
