@@ -27,6 +27,8 @@ function checkKey() {
   $("#keyMsg").className = `hint ${ok ? "ok" : keyIn.value.trim() ? "bad" : ""}`;
   if (ok) store.set("chave", keyIn.value.trim());
   if (!$("#keyQr").hidden) void drawQr();
+  // A lista de rádios preparados é por chave: outra chave = outro raid
+  if (ok && keyId() !== shownKey) { shownKey = keyId(); renderDone(); suggestNext(); }
   return ok;
 }
 async function drawQr() {
@@ -37,7 +39,7 @@ async function drawQr() {
 keyIn.value = store.get("chave") ?? "";
 keyIn.oninput = checkKey;
 $("#keyNew").onclick = () => {
-  if (keyIn.value && !confirmInline("#keyNew", "Substituir a chave? Rádios já preparados deixam de comunicar com os novos.")) return;
+  if (keyIn.value && !confirmInline("#keyNew", "Substituir a chave? Os rádios já preparados ficam com a chave antiga e deixam de comunicar com os novos — têm de ser configurados outra vez.")) return;
   keyIn.value = newKey(); checkKey(); toast("Chave nova gerada", "ok");
 };
 $("#keyCopy").onclick = async () => {
@@ -76,16 +78,31 @@ function syncRole() {
 document.querySelectorAll<HTMLInputElement>('input[name="role"]').forEach((r) => (r.onchange = syncRole));
 codeIn.oninput = () => (codeIn.value = codeIn.value.toUpperCase().replace(/[^A-Z0-9]/g, ""));
 
-interface Done { code: string; role: Role; node: string; t: number }
+/** Impressão digital curta da chave (nunca se guarda a chave na lista) */
+function keyId(): string {
+  let h = 0x811c9dc5;
+  for (const c of keyIn.value.trim()) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+let shownKey = "";
+
+interface Done { code: string; role: Role; node: string; t: number; k?: string }
 let done: Done[] = [];
 try { done = JSON.parse(store.get("preparados") ?? "[]"); } catch { done = []; }
+const mine = () => done.filter((d) => d.k === keyId());
 function renderDone() {
-  $("#done").innerHTML = done.length
-    ? done.slice().reverse().map((d) => `<tr><td><b>${d.code}</b></td><td>${d.role === "base" ? "Base" : "Equipa"}</td><td class="mono">${d.node}</td><td>${new Date(d.t).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" })}</td></tr>`).join("")
-    : `<tr><td colspan="4" class="empty">Ainda nenhum rádio preparado neste computador.</td></tr>`;
+  const list = mine();
+  const others = done.length - list.length;
+  const fmt = (t: number) => new Date(t).toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  $("#done").innerHTML = list.length
+    ? list.slice().reverse().map((d) => `<tr><td><b>${d.code}</b></td><td>${d.role === "base" ? "Base" : "Equipa"}</td><td class="mono">${d.node}</td><td>${fmt(d.t)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">Ainda nenhum rádio preparado com esta chave.</td></tr>`;
+  $("#doneOther").textContent = others
+    ? `${others} rádio${others > 1 ? "s" : ""} preparado${others > 1 ? "s" : ""} com outra chave não aparece${others > 1 ? "m" : ""} aqui: ${others > 1 ? "têm de ser configurados" : "tem de ser configurado"} outra vez (“Só configurar”) para ${others > 1 ? "comunicarem" : "comunicar"} neste raid.`
+    : "";
 }
 function suggestNext() {
-  const nums = done.filter((d) => d.role === "equipa").map((d) => Number(d.code.replace(/\D/g, "")) || 0);
+  const nums = mine().filter((d) => d.role === "equipa").map((d) => Number(d.code.replace(/\D/g, "")) || 0);
   const n = (nums.length ? Math.max(...nums) : 0) + 1;
   codeIn.value = `EQ${n}`;
   nameIn.value = `Equipa ${n}`;
@@ -141,7 +158,8 @@ async function getImage(b: Board): Promise<Uint8Array> {
 let flashedBoard: Board | undefined;
 async function configure(port: SerialPort, p: RadioPlan) {
   const { nodeNum } = await configureRadio(port, p, log, progress, flashedBoard);
-  done.push({ code: p.code, role: p.role, node: nodeNum.toString(16), t: Date.now() });
+  done = done.filter((d) => !(d.k === keyId() && d.code === p.code)); // reconfigurar não duplica
+  done.push({ code: p.code, role: p.role, node: nodeNum.toString(16), t: Date.now(), k: keyId() });
   store.set("preparados", JSON.stringify(done));
   renderDone();
   label.innerHTML = `<b>${p.code} pronto.</b> Pode desligar o cabo e ligar o próximo rádio.`;
