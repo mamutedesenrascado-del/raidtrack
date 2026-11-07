@@ -1,0 +1,15 @@
+<!-- Teste sem hardware: npm run dev e abrir /test/instalador-simulado.html -->
+<!doctype html><html><body><pre id="o"></pre><script type="module">
+import "../src/shims/process";
+import { firstPort, received, state } from "./fake-radio";
+import { configureRadio, newKey } from "../src/radio-setup";
+const logs = [];
+const t0 = Date.now();
+try {
+  const r = await configureRadio(firstPort, { role: "base", code: "BASE", name: "RaidTrack Base", pskB64: newKey(), positionSecs: 60 },
+    (m) => logs.push(m), (p, l) => logs.push(`[${p}%] ${l}`));
+  window.__res = { ok: true, node: r.nodeNum.toString(16), state, received, logs, secs: (Date.now() - t0) / 1000 };
+} catch (e) {
+  window.__res = { ok: false, err: String(e), state, received, logs };
+}
+</script></body></html>

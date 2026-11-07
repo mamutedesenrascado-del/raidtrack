@@ -2,7 +2,7 @@ import "./shims/process";
 import "./style.css";
 import QRCode from "qrcode";
 import {
-  configureRadio, downloadImage, flashFactory, keyBytes, loadManifest, newKey, pickPort,
+  configureRadio, downloadImage, flashFactory, keyBytes, loadManifest, newKey, pickPort, PortLostError,
   type FirmwareManifest, type RadioPlan, type Role,
 } from "./radio-setup";
 
@@ -162,16 +162,15 @@ async function run(withFlash: boolean) {
       image = await getImage(p.role);
       log(`Imagem: ${(image.length / 1024).toFixed(0)} KB`);
       await flashFactory(port, image, $<HTMLInputElement>("#erase").checked, log, progress);
-      progress(100, "Firmware gravado. A aguardar o arranque do rádio…");
-      await new Promise((r) => setTimeout(r, 8000)); // primeiro arranque: formata a memória interna
+      progress(100, "Firmware gravado. A aguardar o primeiro arranque (até 30 s)…");
+      await new Promise((r) => setTimeout(r, 6000)); // primeiro arranque: formata a memória interna
     }
     try {
       await configure(port, p);
     } catch (e) {
-      // No T3-S3 a porta USB muda depois de reiniciar: o browser precisa que a escolha outra vez
-      log(`Primeira tentativa de configuração falhou: ${(e as Error).message}`);
-      if (withFlash) {
-        progress(100, "Firmware gravado. Para configurar, escolha o rádio outra vez.");
+      log(`Configuração interrompida: ${(e as Error).message}`);
+      if (e instanceof PortLostError) {
+        progress(100, withFlash ? "Firmware gravado. Para configurar, escolha o rádio outra vez." : "Escolha o rádio outra vez para continuar.");
         $("#again").hidden = false;
         return;
       }

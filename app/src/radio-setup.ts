@@ -81,17 +81,6 @@ export async function flashFactory(port: SerialPort, image: Uint8Array, eraseAll
 
 // ───────────────────────── Configuração ─────────────────────────
 
-function waitConfigured(dev: MeshDevice, ms: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let myNum = 0;
-    const t = setTimeout(() => reject(new Error("O rádio não respondeu. Desligue e volte a ligar o cabo USB e tente de novo.")), ms);
-    dev.events.onMyNodeInfo.subscribe((m) => (myNum = m.myNodeNum));
-    dev.events.onDeviceStatus.subscribe((s) => {
-      if (s === Types.DeviceStatusEnum.DeviceConfigured) { clearTimeout(t); resolve(myNum); }
-    });
-  });
-}
-
 const cfg = (c: Protobuf.Config.Config["payloadVariant"]) => create(Protobuf.Config.ConfigSchema, { payloadVariant: c });
 const mod = (c: Protobuf.ModuleConfig.ModuleConfig["payloadVariant"]) => create(Protobuf.ModuleConfig.ModuleConfigSchema, { payloadVariant: c });
 
@@ -138,44 +127,129 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array): [string, Settin
   return out;
 }
 
-export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log, progress: Progress): Promise<{ nodeNum: number }> {
-  const psk = keyBytes(plan.pskB64);
-  if (!psk) throw new Error("A chave do raid não é válida.");
+// ── Sessão com o rádio ──
+interface Session { port: SerialPort; transport: TransportWebSerial; dev: MeshDevice; nodeNum: number; region: number }
 
-  progress(5, "A ligar ao rádio…");
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what}: o rádio não respondeu a tempo.`)), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
+/** A biblioteca rejeita com objetos {id, error}; converte para mensagens legíveis */
+function toError(e: unknown, what: string): Error {
+  if (e instanceof Error) return e;
+  const code = (e as { error?: number })?.error;
+  const name = code !== undefined ? Protobuf.Mesh.Routing_Error[code] ?? String(code) : String(e);
+  return new Error(`${what}: o rádio não confirmou (${name}).`);
+}
+
+async function closeSession(s: Session | null) {
+  if (!s) return;
+  try { await withTimeout(s.dev.disconnect(), 4000, "Desligar"); } catch { /* segue */ }
+  try { await s.transport.disconnect(); } catch { /* já fechado */ }
+  try { await s.port.close(); } catch { /* já fechado */ }
+}
+
+/** Abre a porta e espera que o rádio envie toda a configuração atual */
+async function openSession(port: SerialPort, ms: number): Promise<Session> {
   const transport = await TransportWebSerial.createFromPort(port, 115200);
   const dev = new MeshDevice(transport);
-  const ready = waitConfigured(dev, 45_000);
-  void dev.configure();
-  const nodeNum = await ready;
-  log(`Rádio ligado (nó ${nodeNum.toString(16)})`);
-
-  const steps: [string, () => Promise<unknown>][] = buildSettings(plan, psk).map(([label, s]) => [label, () => {
-    switch (s.kind) {
-      case "owner": return dev.setOwner(s.msg);
-      case "config": return dev.setConfig(s.msg);
-      case "module": return dev.setModuleConfig(s.msg);
-      case "canned": return dev.setCannedMessages(s.msg);
-      case "channel": return dev.setChannel(s.msg);
-    }
-  }]);
-
+  let nodeNum = 0, region = 0;
+  dev.events.onMyNodeInfo.subscribe((m) => (nodeNum = m.myNodeNum));
+  dev.events.onConfigPacket.subscribe((c) => { if (c.payloadVariant.case === "lora") region = c.payloadVariant.value.region; });
+  const configured = new Promise<void>((resolve) => dev.events.onDeviceStatus.subscribe((st) => { if (st === Types.DeviceStatusEnum.DeviceConfigured) resolve(); }));
+  void dev.configure().catch(() => {});
+  const s: Session = { port, transport, dev, nodeNum: 0, region: 0 };
   try {
-    for (let i = 0; i < steps.length; i++) {
-      const [label, run] = steps[i];
-      progress(10 + Math.round((i / steps.length) * 80), `A configurar: ${label}…`);
-      await run();
+    await withTimeout(configured, ms, "Ligação");
+  } catch (e) {
+    await closeSession(s);
+    throw e;
+  }
+  s.nodeNum = nodeNum; s.region = region;
+  return s;
+}
+
+/**
+ * Depois de um reinício, a porta USB do ESP32-S3 (T3-S3) desaparece e volta como nova.
+ * Procura-a entre as portas já autorizadas neste browser (mesmo fabricante/produto) e liga.
+ */
+async function reopen(prefer: SerialPort, totalMs: number, log: Log): Promise<Session> {
+  const info = prefer.getInfo();
+  const deadline = Date.now() + totalMs;
+  let lastErr: unknown = null;
+  while (Date.now() < deadline) {
+    const ports = await navigator.serial.getPorts();
+    const same = ports.filter((p) => { const i = p.getInfo(); return i.usbVendorId === info.usbVendorId && i.usbProductId === info.usbProductId; });
+    const order = [prefer, ...same.filter((p) => p !== prefer)];
+    for (const p of order) {
+      try { return await openSession(p, 15_000); }
+      catch (e) { lastErr = e; try { await p.close(); } catch { /* fechada */ } }
+    }
+    await sleep(2000);
+  }
+  log(`Última tentativa: ${(lastErr as Error)?.message ?? lastErr}`);
+  throw new PortLostError();
+}
+export class PortLostError extends Error {
+  constructor() { super("Não encontrei o rádio depois de reiniciar. Escolha a porta outra vez."); }
+}
+
+export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log, progress: Progress): Promise<{ nodeNum: number; port: SerialPort }> {
+  const psk = keyBytes(plan.pskB64);
+  if (!psk) throw new Error("A chave do raid não é válida.");
+  const settings = buildSettings(plan, psk);
+  const lora = settings.find(([, x]) => x.kind === "config" && x.msg.payloadVariant.case === "lora")![1] as Extract<Setting, { kind: "config" }>;
+  const EU868 = Protobuf.Config.Config_LoRaConfig_RegionCode.EU_868;
+
+  progress(5, "A ligar ao rádio…");
+  let s: Session | null = await reopen(port, 45_000, log);
+  try {
+    log(`Rádio ligado (nó ${s.nodeNum.toString(16)}, região ${s.region})`);
+
+    // 1.ª vez: definir a região à parte. O rádio cria aí a sua identidade (o número do nó muda) e reinicia;
+    // tudo o resto só se envia depois, numa nova ligação.
+    if (s.region !== EU868) {
+      progress(15, "A definir a região EU868 — o rádio vai reiniciar…");
+      s.dev.events.onPendingSettingsChange.dispatch(true); // envia sem transação, para gravar e reiniciar já
+      try { await withTimeout(s.dev.setConfig(lora.msg), 12_000, "Região"); log("✓ Região EU868"); }
+      catch { log("Região enviada (o rádio reinicia antes de confirmar — é normal)"); }
+      await closeSession(s); s = null;
+      progress(25, "A aguardar que o rádio reinicie…");
+      await sleep(14_000);
+      s = await reopen(port, 60_000, log);
+      log(`Rádio ligado de novo (nó ${s.nodeNum.toString(16)}, região ${s.region})`);
+      if (s.region !== EU868) throw new Error("A região não ficou gravada. Tente “Só configurar” outra vez.");
+    }
+
+    for (let i = 0; i < settings.length; i++) {
+      const [label, x] = settings[i];
+      progress(30 + Math.round((i / settings.length) * 60), `A configurar: ${label}…`);
+      const send = () => {
+        switch (x.kind) {
+          case "owner": return s!.dev.setOwner(x.msg);
+          case "config": return s!.dev.setConfig(x.msg);
+          case "module": return s!.dev.setModuleConfig(x.msg);
+          case "canned": return s!.dev.setCannedMessages(x.msg);
+          case "channel": return s!.dev.setChannel(x.msg);
+        }
+      };
+      try { await withTimeout(send(), 20_000, label); }
+      catch (e) { throw toError(e, label); }
       log(`✓ ${label}`);
     }
     progress(92, "A guardar e reiniciar…");
-    await dev.commitEditSettings();
+    try { await withTimeout(s.dev.commitEditSettings(), 15_000, "Guardar"); }
+    catch (e) { throw toError(e, "Guardar"); }
     log("✓ Configuração guardada; o rádio vai reiniciar");
+    await sleep(1500);
+    progress(100, "Configurado");
+    return { nodeNum: s.nodeNum, port: s.port };
   } finally {
-    await new Promise((r) => setTimeout(r, 1500));
-    try { await dev.disconnect(); } catch { /* o rádio já reiniciou */ }
+    await closeSession(s);
   }
-  progress(100, "Configurado");
-  return { nodeNum };
 }
 
 /** Lê a imagem de firmware publicada com a app (GitHub Pages) */
