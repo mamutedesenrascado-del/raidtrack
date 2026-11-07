@@ -40,6 +40,7 @@
       <div class="tabs" role="tablist">
         <button data-tab="teams">Equipas <span id="teamCount" class="count">0</span></button>
         <button data-tab="msgs">Mensagens</button>
+        <button data-tab="raid">Raid</button>
         <button data-tab="log">Registo</button>
       </div>
       <div class="pane" id="pane-teams"><div id="teams"></div></div>
@@ -50,9 +51,42 @@
         </div>
         <form id="msgForm">
           <select id="msgTo" aria-label="Destino"></select>
-          <input id="msgText" maxlength="200" placeholder="Mensagem…" autocomplete="off" />
+          <input id="msgText" maxlength="160" placeholder="Mensagem (fica no ecrã até OK)…" autocomplete="off" />
           <button type="submit" class="primary">Enviar</button>
         </form>
+      </div>
+      <div class="pane" id="pane-raid" hidden>
+        <section class="plan-sec">
+          <label class="fld">Nome do raid <input id="raidName" placeholder="ex. Raid Pioneiros 2026" /></label>
+        </section>
+        <section class="plan-sec">
+          <h3>Percurso teórico</h3>
+          <p id="routeInfo" class="muted"></p>
+          <div class="row">
+            <label class="btn">Importar GPX<input id="routeFile" type="file" accept=".gpx,application/gpx+xml" hidden /></label>
+            <button id="routeClear" class="ghost" hidden>Remover</button>
+          </div>
+          <label class="fld inline">Corredor <input id="corridor" type="number" min="5" max="1000" step="5" /> m
+            <small class="muted">a equipa conta como “no percurso” até esta distância</small></label>
+        </section>
+        <section class="plan-sec">
+          <h3>Zonas proibidas</h3>
+          <ul id="zoneList" class="zones"></ul>
+          <div id="zoneDraw" class="row">
+            <input id="zoneName" placeholder="Nome (ex. Estrada nacional)" />
+            <button id="zoneDrawBtn" class="primary">Desenhar no mapa</button>
+          </div>
+          <div id="zoneDrawing" hidden>
+            <p id="zoneDrawHint" class="hint"></p>
+            <div class="row"><button id="zoneDone" class="primary">Concluir</button><button id="zoneUndo" class="ghost">Desfazer ponto</button><button id="zoneCancel" class="ghost">Cancelar</button></div>
+          </div>
+          <p class="muted small">Quando uma equipa entra numa zona, a base é avisada e o tracker apita e mostra o aviso até carregarem OK.</p>
+        </section>
+        <section class="plan-sec">
+          <h3>Final do raid</h3>
+          <div class="row"><button id="btnReport" class="primary">Relatório PDF</button><button id="btnGpx" class="ghost">GPX de todas as equipas</button></div>
+          <p class="muted small">Indique a hora de partida e chegada de cada equipa no separador Equipas: a distância, o tempo e a % no percurso contam só entre essas horas.</p>
+        </section>
       </div>
       <div class="pane" id="pane-log" hidden><ol id="log"></ol></div>
     </aside>
@@ -62,6 +96,9 @@
       <p id="askText"></p>
       <div class="askBtns"><button id="askNo" class="ghost">Cancelar</button><button id="askOk" class="primary">Confirmar</button></div>
     </div>
+  </div>
+  <div id="pdfView" class="pdfView" hidden role="dialog" aria-modal="true" aria-label="Relatório">
+    <div class="pdfBox"><div class="pdfBar"><b>Relatório do raid</b><button id="pdfClose" class="ghost">Fechar</button></div><iframe id="pdfFrame" title="Relatório PDF"></iframe></div>
   </div>
   <div id="toasts"></div>
   <script type="module" src="/src/main.ts"></script>

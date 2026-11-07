@@ -28,6 +28,12 @@
 #ifndef RAIDTRACK_SOS_REPEAT_MS
 #define RAIDTRACK_SOS_REPEAT_MS 30000 // repetir SOS até ACK
 #endif
+#ifndef RAIDTRACK_NOTICE_BEEP_MS
+#define RAIDTRACK_NOTICE_BEEP_MS 30000 // lembrete sonoro de mensagem por ler
+#endif
+#ifndef RAIDTRACK_ZONE_BEEP_MS
+#define RAIDTRACK_ZONE_BEEP_MS 8000 // alarme de zona proibida repete até OK
+#endif
 #ifndef RAIDTRACK_PING_JITTER_MS
 #define RAIDTRACK_PING_JITTER_MS 8000 // atraso máximo de resposta a PING geral
 #endif
@@ -107,6 +113,9 @@ int32_t RaidTrackModule::runOnce()
     }
 #endif
 
+#ifdef RAIDTRACK_ROLE_TEAM
+    noticeTick(now);
+#endif
     buzzerTick(now);
     return 50; // ms — suficiente para ler o botão com debounce
 }
@@ -248,6 +257,14 @@ ProcessMessage RaidTrackModule::handleReceived(const meshtastic_MeshPacket &mp)
         // PING dirigido a nós: responde já. PING geral: atraso aleatório para não colidir.
         pingReplyAt = millis() + (isToUs(&mp) ? 100 : (uint32_t)random(500, RAIDTRACK_PING_JITTER_MS));
         break;
+
+    case MSG_ZONE:
+    case MSG_TEXT:
+        // [hdr][u16 id][texto UTF-8, sem acentos]
+        if (pl.size < 6)
+            break;
+        queueNotice(getU16(b + 3), b[2] == MSG_ZONE, from, (const char *)(b + 5), pl.size - 5);
+        break;
 #endif
 
     default:
@@ -257,6 +274,200 @@ ProcessMessage RaidTrackModule::handleReceived(const meshtastic_MeshPacket &mp)
     // CONTINUE: o RoutingModule tem de ver o pacote para o entregar à app (USB/BLE) da base.
     return ProcessMessage::CONTINUE;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Avisos persistentes (equipa): mensagens da base e alertas de zona proibida.
+// Ficam no ecrã até a equipa carregar OK; mensagens longas dividem-se em páginas ("Mais >").
+// Ao confirmar, envia MSG_READ à base. Se outro aviso do Meshtastic tapar o nosso, volta a mostrá-lo.
+
+#ifdef RAIDTRACK_ROLE_TEAM
+static constexpr uint8_t NOTICE_COLS = 20; // caracteres por linha no OLED de 128 px
+static constexpr uint8_t NOTICE_LINES = 3; // linhas de texto por página (+ 1 linha para o botão)
+
+/** Parte o texto em linhas de até NOTICE_COLS, sem cortar palavras quando possível */
+static uint8_t wrapLines(const char *text, char lines[][NOTICE_COLS + 1], uint8_t maxLines)
+{
+    uint8_t n = 0;
+    size_t len = strlen(text), i = 0;
+    while (i < len && n < maxLines) {
+        while (i < len && text[i] == ' ')
+            i++;
+        size_t end = i + NOTICE_COLS;
+        if (end >= len) {
+            end = len;
+        } else {
+            size_t sp = end;
+            while (sp > i && text[sp] != ' ')
+                sp--;
+            if (sp > i)
+                end = sp;
+        }
+        size_t take = end - i;
+        memcpy(lines[n], text + i, take);
+        lines[n][take] = '\0';
+        n++;
+        i = end;
+    }
+    return n;
+}
+
+void RaidTrackModule::queueNotice(uint16_t id, bool zone, NodeNum from, const char *text, size_t len)
+{
+    // Repetição do mesmo aviso (a base reenvia alertas de zona): não duplica, só volta a avisar
+    for (uint8_t i = 0; i < noticeCount; i++) {
+        if (notices[i].id == id && notices[i].from == from) {
+            if (i == 0) {
+                noticeNextBeep = 0;
+                showNotice();
+            }
+            return;
+        }
+    }
+    Notice nt;
+    nt.id = id;
+    nt.zone = zone;
+    nt.from = from;
+    size_t n = len < sizeof(nt.text) - 1 ? len : sizeof(nt.text) - 1;
+    for (size_t k = 0; k < n; k++)
+        nt.text[k] = (text[k] >= 32 && text[k] < 127) ? text[k] : ' '; // OLED: só ASCII
+    nt.text[n] = '\0';
+
+    if (noticeCount == MAX_NOTICES)
+        noticeCount--; // fila cheia: perde o mais recente da cauda
+    if (zone) {
+        // Zona proibida tem prioridade: vai para a frente
+        for (uint8_t i = noticeCount; i > 0; i--)
+            notices[i] = notices[i - 1];
+        notices[0] = nt;
+        noticeCount++;
+        noticePage = 0;
+        noticeNextBeep = 0;
+        showNotice();
+    } else {
+        notices[noticeCount++] = nt;
+        if (noticeCount == 1) {
+            noticePage = 0;
+            noticeNextBeep = 0;
+            showNotice();
+        }
+    }
+}
+
+void RaidTrackModule::showNotice()
+{
+#if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD)
+    if (!noticeCount || !screen)
+        return;
+    const Notice &nt = notices[0];
+    static char body[NOTICE_LINES * (NOTICE_COLS + 1) + 32];
+    static const char *optOk[] = {"OK"};
+    static const char *optMore[] = {"Mais >"};
+    char all[200];
+    if (nt.zone)
+        snprintf(all, sizeof(all), "%s", nt.text);
+    else
+        snprintf(all, sizeof(all), "BASE: %s", nt.text);
+
+    char lines[12][NOTICE_COLS + 1];
+    uint8_t total = wrapLines(all, lines, 12);
+    uint8_t textLines = nt.zone ? NOTICE_LINES - 1 : NOTICE_LINES;
+    uint8_t pages = total ? (total + textLines - 1) / textLines : 1;
+    if (noticePage >= pages)
+        noticePage = pages - 1;
+
+    body[0] = '\0';
+    if (nt.zone)
+        strcat(body, "!! ZONA PROIBIDA !!\n");
+    for (uint8_t l = noticePage * textLines; l < total && l < (noticePage + 1) * textLines; l++) {
+        strcat(body, lines[l]);
+        strcat(body, "\n");
+    }
+    size_t bl = strlen(body);
+    if (bl && body[bl - 1] == '\n')
+        body[bl - 1] = '\0';
+
+    graphics::BannerOverlayOptions o;
+    o.message = body;
+    o.durationMs = 0; // fica até a equipa escolher
+    bool last = noticePage + 1 >= pages;
+    o.optionsArrayPtr = last ? optOk : optMore;
+    o.optionsCount = 1;
+    o.bannerCallback = &RaidTrackModule::onNoticeButton;
+    o.notificationType = graphics::notificationTypeEnum::selection_picker;
+    powerFSM.trigger(EVENT_RECEIVED_MSG); // acorda o ecrã
+    screen->showOverlayBanner(o);
+#endif
+}
+
+void RaidTrackModule::onNoticeButton(int)
+{
+    // Não mostrar já a página/aviso seguinte: logo a seguir a este callback o Meshtastic apaga o aviso.
+    if (raidTrackModule)
+        raidTrackModule->noticeOkPending = true;
+}
+
+void RaidTrackModule::noticeConfirmed()
+{
+    if (!noticeCount)
+        return;
+    // Ainda há páginas? (mesmo cálculo que showNotice)
+    const Notice &nt = notices[0];
+    char all[200];
+    snprintf(all, sizeof(all), nt.zone ? "%s" : "BASE: %s", nt.text);
+    char lines[12][NOTICE_COLS + 1];
+    uint8_t total = wrapLines(all, lines, 12);
+    uint8_t textLines = nt.zone ? NOTICE_LINES - 1 : NOTICE_LINES;
+    uint8_t pages = total ? (total + textLines - 1) / textLines : 1;
+    if (noticePage + 1 < pages) {
+        noticePage++;
+        showNotice();
+        return;
+    }
+
+    // Confirmação de leitura para a base
+    uint8_t b[5] = {MAGIC, VERSION, MSG_READ, 0, 0};
+    putU16(b + 3, nt.id);
+    sendRaw(b, sizeof(b), nt.from, false);
+    LOG_INFO("RaidTrack: aviso %u confirmado", nt.id);
+
+    for (uint8_t i = 1; i < noticeCount; i++)
+        notices[i - 1] = notices[i];
+    noticeCount--;
+    noticePage = 0;
+    noticeNextBeep = 0;
+    if (noticeCount)
+        showNotice();
+}
+
+void RaidTrackModule::noticeTick(uint32_t now)
+{
+    if (noticeOkPending) {
+        noticeOkPending = false;
+        noticeConfirmed();
+        noticeNextCheck = now + 500;
+    }
+    if (!noticeCount)
+        return;
+    // Som: zona proibida = alarme repetido; mensagem = lembrete espaçado
+    if ((int32_t)(now - noticeNextBeep) >= 0) {
+        if (notices[0].zone) {
+            buzz(4, 300, 150);
+            noticeNextBeep = now + RAIDTRACK_ZONE_BEEP_MS;
+        } else {
+            buzz(2, 120, 120);
+            noticeNextBeep = now + RAIDTRACK_NOTICE_BEEP_MS;
+        }
+    }
+#if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD)
+    // Outro aviso (ex.: SOS, mensagem normal) tapou o nosso? Volta a mostrá-lo quando sair.
+    if ((int32_t)(now - noticeNextCheck) >= 0) {
+        noticeNextCheck = now + 2000;
+        if (screen && !screen->isOverlayBannerShowing())
+            showNotice();
+    }
+#endif
+}
+#endif
 
 // ---------------------------------------------------------------------------------------------
 // Interface

@@ -25,6 +25,9 @@ enum MsgType : uint8_t {
     MSG_SOS_ACK = 0x02,
     MSG_SOS_CANCEL = 0x03,
     MSG_PING = 0x04,
+    MSG_ZONE = 0x05, // base → equipa: entrou numa zona proibida (fica no ecrã com som até OK)
+    MSG_TEXT = 0x06, // base → equipa: mensagem que fica no ecrã até OK
+    MSG_READ = 0x07, // equipa → base: a equipa carregou OK (confirmação de leitura)
 };
 
 enum SosFlags : uint8_t {
@@ -54,6 +57,26 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
     void buzz(uint8_t beeps, uint16_t onMs, uint16_t offMs);
     void buzzerTick(uint32_t now);
     void sosButtonTick(uint32_t now);
+
+    // --- avisos persistentes (mensagens e zonas): ficam no ecrã até a equipa carregar OK ---
+    struct Notice {
+        uint16_t id;
+        bool zone;
+        NodeNum from;
+        char text[164];
+    };
+    static constexpr uint8_t MAX_NOTICES = 4;
+    Notice notices[MAX_NOTICES];
+    uint8_t noticeCount = 0;
+    uint8_t noticePage = 0;
+    uint32_t noticeNextBeep = 0;
+    uint32_t noticeNextCheck = 0;
+    bool noticeOkPending = false; // OK carregado: tratar no próximo ciclo (o Meshtastic limpa o aviso depois do callback)
+    void queueNotice(uint16_t id, bool zone, NodeNum from, const char *text, size_t len);
+    void showNotice();
+    void noticeTick(uint32_t now);
+    static void onNoticeButton(int selected);
+    void noticeConfirmed();
 
     // Estado SOS (equipa)
     bool sosActive = false;

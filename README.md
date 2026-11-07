@@ -85,5 +85,12 @@ O Safari não suporta Bluetooth Web. Duas vias:
 - Cartões de equipa: última posição, bateria, sinal, distância/rumo à base. Estado *Sinal atrasado* > 3 min, *Sem sinal* > 10 min.
 - **Localizar / Localizar todas:** pede posição imediata.
 - **SOS:** alarme sonoro + cartão vermelho → **Recebido — avisar equipa** envia a confirmação ao tracker. Se a equipa continuar a repetir, a app volta a confirmar sozinha.
-- Mensagens para uma equipa (com confirmação de entrega) ou para todas.
+- Mensagens para uma equipa ou para todas: ficam no ecrã do tracker até a equipa carregar **OK**, e a app mostra quando foi lida.
+- **Horas de partida e chegada** em cada cartão (escrever `hh:mm` ou **Agora**): a distância, o tempo e a % no percurso contam só entre essas horas.
 - **Exportar:** percursos em GPX (abre no Google Earth/QGIS) e registo do raid em CSV.
+
+### Separador Raid — percurso, zonas proibidas e relatório
+- **Importar GPX** do percurso teórico (trk, rte ou só pontos): aparece tracejado no mapa, com os postos. Cada equipa mostra a **% no percurso** (distância feita a menos de *corredor* metros do percurso, 50 m por omissão) e a distância atual ao percurso.
+- **Zonas proibidas:** dar um nome, **Desenhar no mapa** (clicar nos cantos) e **Concluir**. Quando uma equipa entra numa zona: alarme e aviso na base, e o tracker apita e mostra "ZONA PROIBIDA" até carregarem OK (repete de 5 em 5 min enquanto lá estiverem).
+- **Relatório PDF:** resumo de todas as equipas (partida, chegada, duração, distância, % no percurso, cobertura, entradas em zonas, SOS) com mapa geral, e uma página por equipa com o mapa do seu percurso e os eventos. O mapa de fundo precisa de Internet; sem Internet sai com quadrícula e escala.
+- **GPX de todas as equipas:** um ficheiro com o percurso teórico, os postos e o rasto de cada equipa.

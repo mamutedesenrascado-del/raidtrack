@@ -55,6 +55,29 @@ Todas as mensagens começam com um cabeçalho de 3 bytes. Inteiros em little-end
 
 Sem payload (3 bytes). A equipa responde de imediato com a sua posição (`POSITION_APP`). Botão **"Localizar agora"** na app.
 
+### `0x05` ZONE — base → equipa (aviso de zona proibida)
+### `0x06` TEXT — base → equipa ou todos (mensagem que fica no ecrã)
+
+| Byte | Tipo | Campo |
+|---|---|---|
+| 3 | u16 | `id` do aviso |
+| 5 | ASCII | texto, até 160 caracteres, sem acentos |
+
+O tracker mostra o aviso no ecrã **até a equipa carregar OK** (botão OK; textos longos têm páginas "Mais >").
+- `ZONE`: título "!! ZONA PROIBIDA !!", apita 4× a cada 8 s até OK; passa à frente de mensagens em fila.
+- `TEXT`: prefixo "BASE:", apita 2× a cada 30 s até OK.
+- Um `id` repetido volta a alertar sem duplicar o aviso. Fila de até 4 avisos.
+
+A base calcula a entrada na zona a partir da posição da equipa e envia `ZONE` à entrada e de 5 em 5 min enquanto lá estiver.
+
+### `0x07` READ — equipa → base
+
+| Byte | Tipo | Campo |
+|---|---|---|
+| 3 | u16 | `id` do aviso confirmado |
+
+Enviado quando a equipa carrega OK na última página. A app mostra "lida HH:MM" (ou a lista das equipas que leram, se foi para todas).
+
 ## Botões do tracker
 
 Cada botão liga entre o GPIO e GND (pull-up interno). O instalador escolhe os pinos certos para a placa detetada.

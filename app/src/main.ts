@@ -3,8 +3,9 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { connectRadio, type Dest, type Link, type LinkEvents, type LinkStatus } from "./link";
-import { decode, encodePing, encodeSosAck } from "./protocol";
-import { startSim } from "./sim";
+import { decode, encodePing, encodeSosAck, encodeText, encodeZone } from "./protocol";
+import { adherence, clip, distToRoute, fmtDur, fmtKm, inPolygon, lineLength, oledText, parseGpx, walked, type LatLon } from "./geo";
+import { DEMO_ROUTE, DEMO_WPTS, DEMO_ZONE, startSim } from "./sim";
 import { demoTerrain } from "./terrain";
 
 /** Versão de demonstração (página única, dados fictícios, sem rádio) */
@@ -18,10 +19,24 @@ interface Team {
   lat?: number; lon?: number; posAt?: number; heard?: number;
   bat?: number; snr?: number; rssi?: number; hops?: number | null;
   track: Pt[]; sos?: Sos;
+  /** hora de partida e de chegada (ms), introduzidas pela base */
+  start?: number; end?: number;
+  /** zonas proibidas onde a equipa está agora, e quando foi avisada (id do aviso + hora) */
+  inZones?: Record<string, { id: number; since: number; sentAt: number }>;
 }
-interface Msg { t: number; from: number; to: Dest; text: string; dir: "in" | "out"; st?: "a enviar" | "entregue" | "enviada" | "falhou" }
-interface LogEv { t: number; kind: "sos" | "msg" | "info" | "ligacao"; text: string }
-interface Raid { started: number; teams: Record<number, Team>; msgs: Msg[]; log: LogEv[]; base?: [number, number] }
+interface Msg {
+  t: number; from: number; to: Dest; text: string; dir: "in" | "out"; st?: "a enviar" | "entregue" | "enviada" | "falhou";
+  /** id do aviso no tracker e quem já carregou OK (nó → hora) */
+  id?: number; reads?: Record<string, number>;
+}
+interface LogEv { t: number; kind: "sos" | "msg" | "info" | "ligacao" | "zona"; text: string }
+interface Zone { id: string; name: string; poly: LatLon[] }
+interface Route { name: string; pts: LatLon[]; wpts: { name: string; lat: number; lon: number }[] }
+interface Raid {
+  started: number; teams: Record<number, Team>; msgs: Msg[]; log: LogEv[]; base?: [number, number];
+  name?: string; route?: Route; zones?: Zone[]; corridor?: number;
+}
+export type { Raid, Team, Zone, Route, LogEv };
 
 const COLORS = ["#2563eb", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be185d", "#4d7c0f", "#a16207"];
 const STALE_MS = 3 * 60_000;
@@ -96,13 +111,32 @@ const map = L.map("map", { layers: [DEMO_BUILD ? demoTerrain() : topo], zoomCont
 if (!DEMO_BUILD) L.control.layers({ Topográfico: topo, OpenStreetMap: osm }, {}, { position: "topright" }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 
+// Percurso teórico, postos e zonas proibidas
+const planLayer = L.layerGroup().addTo(map);
+function drawPlan() {
+  planLayer.clearLayers();
+  for (const z of raid.zones ?? []) {
+    L.polygon(z.poly, { color: "#b91c1c", weight: 2, fillColor: "#ef4444", fillOpacity: 0.18, dashArray: "6 4" })
+      .bindTooltip(`Zona proibida: ${esc(z.name)}`, { sticky: true }).addTo(planLayer);
+  }
+  const r = raid.route;
+  if (r) {
+    L.polyline(r.pts, { color: "#111827", weight: 9, opacity: 0.12 }).addTo(planLayer);
+    L.polyline(r.pts, { color: "#111827", weight: 3, opacity: 0.85, dashArray: "10 6" }).bindTooltip(`Percurso: ${esc(r.name)}`, { sticky: true }).addTo(planLayer);
+    for (const w of r.wpts) {
+      L.marker([w.lat, w.lon], { icon: L.divIcon({ className: "", iconSize: [14, 14], iconAnchor: [7, 7], html: `<div class="wpt"></div>` }), zIndexOffset: 40 })
+        .bindTooltip(esc(w.name)).addTo(planLayer);
+    }
+  }
+}
+
 const markers = new Map<number, L.Marker>();
 const tracks = new Map<number, L.Polyline>();
 let baseMarker: L.Marker | null = null;
 let fitted = false;
 
 function icon(t: Team) {
-  const cls = t.sos && !t.sos.acked ? "sos" : t.sos ? "sos acked" : stateOf(t);
+  const cls = t.sos && !t.sos.acked ? "sos" : t.sos ? "sos acked" : zoneOf(t) ? "zone" : stateOf(t);
   return L.divIcon({
     className: "", iconSize: [44, 44], iconAnchor: [22, 22],
     html: `<div class="pin ${cls}" style="--c:${t.color}"><span>${esc(t.short)}</span></div>`,
@@ -129,6 +163,8 @@ function drawTeam(t: Team) {
 function fitAll() {
   const pts = teams().filter((t) => t.lat !== undefined).map((t) => [t.lat!, t.lon!] as L.LatLngTuple);
   if (raid.base) pts.push(raid.base);
+  if (raid.route) pts.push(...raid.route.pts);
+  for (const z of raid.zones ?? []) pts.push(...z.poly);
   if (pts.length) { map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 16 }); fitted = true; }
 }
 function drawBase() {
@@ -159,21 +195,69 @@ function stateOf(t: Team): "ok" | "stale" | "lost" {
 }
 const STATE_TXT = { ok: "Em contacto", stale: "Sinal atrasado", lost: "Sem sinal" };
 
+/** Zona proibida onde a equipa está (nome), se alguma */
+function zoneOf(t: Team): string | null {
+  const ids = Object.keys(t.inZones ?? {});
+  return ids.length ? (raid.zones ?? []).find((z) => z.id === ids[0])?.name ?? "zona" : null;
+}
+const toTime = (ms?: number) => (ms ? new Date(ms).toTimeString().slice(0, 5) : "");
+/** "HH:MM" → ms no dia do raid (se for antes da partida, conta como dia seguinte) */
+function fromTime(v: string, after?: number): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+  if (!m) return undefined;
+  const d = new Date(raid.started);
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0);
+  let ms = d.getTime();
+  if (after !== undefined && ms < after) ms += 86_400_000;
+  return ms;
+}
+/** Estatísticas de uma equipa entre a partida e a chegada (ou todo o rasto) */
+function teamStats(t: Team) {
+  const tr = clip(t.track, t.start, t.end);
+  const first = tr[0]?.[2], last = tr[tr.length - 1]?.[2];
+  const t0 = t.start ?? first, t1 = t.end ?? (t.start ? Date.now() : last);
+  return {
+    track: tr,
+    distance: walked(tr),
+    duration: t0 !== undefined && t1 !== undefined ? Math.max(0, t1 - t0) : undefined,
+    adh: raid.route ? adherence(tr, raid.route.pts, raid.corridor ?? 50) : null,
+  };
+}
+export type TeamStats = ReturnType<typeof teamStats>;
+
 function renderTeams() {
-  const list = teams().sort((a, b) => Number(!!b.sos) - Number(!!a.sos) || a.short.localeCompare(b.short));
+  // Não refazer os cartões enquanto se escreve uma hora (perdia-se o que se está a escrever)
+  const ae = document.activeElement as HTMLElement | null;
+  if (ae && ae.tagName === "INPUT" && ae.closest("#teams")) return;
+  const list = teams().sort((a, b) => Number(!!b.sos) - Number(!!a.sos) || Number(!!zoneOf(b)) - Number(!!zoneOf(a)) || a.short.localeCompare(b.short));
   $("#teamCount").textContent = String(list.length);
   $("#teams").innerHTML = list.length ? list.map((t) => {
-    const st = t.sos ? (t.sos.acked ? "sos acked" : "sos") : stateOf(t);
+    const zone = zoneOf(t);
+    const st = t.sos ? (t.sos.acked ? "sos acked" : "sos") : zone ? "zone" : stateOf(t);
+    const stats = teamStats(t);
+    const dev = raid.route && t.lat !== undefined ? distToRoute([t.lat, t.lon!], raid.route.pts) : null;
+    const corr = raid.corridor ?? 50;
     const where = t.lat !== undefined ? `${t.lat.toFixed(5)}, ${t.lon!.toFixed(5)}` : "sem posição";
     return `<article class="team ${st} ${selected === t.num ? "sel" : ""}" data-num="${t.num}" style="--c:${t.color}">
       <header><b>${esc(t.short)}</b><span class="lname">${esc(t.long)}</span>
-        <span class="state">${t.sos ? (t.sos.acked ? "SOS confirmado" : "SOS!") : STATE_TXT[stateOf(t)]}</span></header>
+        <span class="state">${t.sos ? (t.sos.acked ? "SOS confirmado" : "SOS!") : zone ? "Zona proibida" : STATE_TXT[stateOf(t)]}</span></header>
+      ${zone ? `<div class="zoneWarn">Dentro de: <b>${esc(zone)}</b> — aviso enviado ao tracker</div>` : ""}
       <dl>
         <div><dt>Última posição</dt><dd>${ago(t.posAt)}</dd></div>
         <div><dt>Bateria</dt><dd class="${(t.bat ?? 100) < 20 ? "low" : ""}">${t.bat !== undefined ? (t.bat > 100 ? "USB" : Math.round(t.bat) + "%") : "—"}</dd></div>
         <div><dt>Sinal</dt><dd>${t.snr !== undefined ? `${t.snr.toFixed(1)} dB${t.hops ? ` · ${t.hops} salto${t.hops > 1 ? "s" : ""}` : ""}` : "—"}</dd></div>
         <div><dt>Da base</dt><dd>${t.lat !== undefined ? distBrg(t.lat, t.lon!) || "base não definida" : "—"}</dd></div>
       </dl>
+      ${raid.route || t.start || stats.track.length > 1 ? `<dl class="plan">
+        ${raid.route ? `<div><dt>No percurso</dt><dd class="${stats.adh && stats.adh.onRoutePct < 70 ? "low" : ""}">${stats.adh ? Math.round(stats.adh.onRoutePct) + " %" : "—"}${dev !== null ? ` <small class="${dev > corr ? "bad" : ""}">· a ${fmtKm(dev)}</small>` : ""}</dd></div>` : ""}
+        <div><dt>Distância${t.start ? "" : " (rasto)"}</dt><dd>${fmtKm(stats.distance)}${stats.duration !== undefined ? ` <small>· ${fmtDur(stats.duration)}</small>` : ""}</dd></div>
+      </dl>` : ""}
+      <div class="times">
+        <label>Partida <input type="text" inputmode="numeric" maxlength="5" placeholder="hh:mm" data-time="start" value="${toTime(t.start)}" aria-label="Hora de partida de ${esc(t.short)}" /></label>
+        <button data-act="startNow" title="Partiu agora">Agora</button>
+        <label>Chegada <input type="text" inputmode="numeric" maxlength="5" placeholder="hh:mm" data-time="end" value="${toTime(t.end)}" aria-label="Hora de chegada de ${esc(t.short)}" /></label>
+        <button data-act="endNow" title="Chegou agora">Agora</button>
+      </div>
       <div class="coords">${where}</div>
       <footer>
         <button data-act="locate">Localizar</button>
@@ -189,7 +273,9 @@ function renderMsgs() {
   box.innerHTML = raid.msgs.slice(-200).map((m) => {
     const who = m.dir === "in" ? nameOf(m.from) : `Base → ${nameOf(m.to)}`;
     const c = m.dir === "in" ? raid.teams[m.from]?.color ?? "#64748b" : "#475569";
-    return `<div class="msg ${m.dir}" style="--c:${c}"><div class="mh"><b>${esc(who)}</b><time>${hhmm(m.t)}</time>${m.st ? `<em class="st ${m.st.replace(" ", "-")}">${m.st}</em>` : ""}</div><p>${esc(m.text)}</p></div>`;
+    const reads = Object.entries(m.reads ?? {});
+    const readTxt = reads.length ? (m.to === "all" ? `lida: ${reads.map(([n]) => nameOf(Number(n))).join(", ")}` : `lida ${hhmm(reads[0][1])}`) : "";
+    return `<div class="msg ${m.dir}" style="--c:${c}"><div class="mh"><b>${esc(who)}</b><time>${hhmm(m.t)}</time>${m.st ? `<em class="st ${m.st.replace(" ", "-")}">${m.st}</em>` : ""}${readTxt ? `<em class="st lida">${esc(readTxt)}</em>` : ""}</div><p>${esc(m.text)}</p></div>`;
   }).join("") || `<p class="empty">Sem mensagens.</p>`;
   box.scrollTop = box.scrollHeight;
   const sel = $<HTMLSelectElement>("#msgTo");
@@ -227,7 +313,7 @@ function renderSos() {
   alarm(active.some((t) => !t.sos!.acked));
 }
 
-function renderAll() { renderTeams(); renderMsgs(); renderLog(); renderSos(); teams().forEach(drawTeam); drawBase(); }
+function renderAll() { renderTeams(); renderMsgs(); renderLog(); renderSos(); renderPlan(); drawPlan(); teams().forEach(drawTeam); drawBase(); }
 
 // ───────────────────────────── Alarme sonoro ─────────────────────────────
 let audio: AudioContext | null = null;
@@ -267,6 +353,7 @@ const events: LinkEvents = {
     t.lat = lat; t.lon = lon; t.posAt = when; t.heard = Math.max(t.heard ?? 0, when);
     const last = t.track[t.track.length - 1];
     if (!last || last[0] !== lat || last[1] !== lon) t.track.push([lat, lon, when]);
+    checkZones(t);
     drawTeam(t); renderTeams(); save();
   },
   battery(n, pct) {
@@ -306,6 +393,15 @@ const events: LinkEvents = {
       if (m.lat !== null) { t.lat = m.lat; t.lon = m.lon!; t.posAt = when; t.track.push([m.lat, m.lon!, when]); }
     } else if (m.type === "sosCancel") {
       if (t.sos && t.sos.seq === m.seq) { t.sos = undefined; log("sos", `${t.short} cancelou o SOS`); toast(`${t.short} cancelou o SOS`, "ok"); }
+    } else if (m.type === "read") {
+      const msg = [...raid.msgs].reverse().find((x) => x.dir === "out" && x.id === m.id);
+      if (msg) {
+        msg.reads ??= {};
+        if (!msg.reads[from]) { msg.reads[from] = when; log("msg", `${t.short} leu: ${msg.text}`); }
+        renderMsgs();
+      } else if (Object.values(t.inZones ?? {}).some((v) => v.id === m.id)) {
+        log("zona", `${t.short} confirmou o aviso de zona proibida`);
+      }
     }
     renderSos(); renderTeams(); drawTeam(t); save();
   },
@@ -337,12 +433,14 @@ async function connect(how: "usb" | "ble" | "demo") {
   }
 }
 
+const newId = () => ((Math.random() * 0xfffe) | 0) + 1;
 async function sendMsg(text: string, dest: Dest) {
   if (!link) return toast("Ligue o rádio primeiro", "warn");
-  const m: Msg = { t: Date.now(), from: myNum, to: dest, text, dir: "out", st: "a enviar" };
+  // Vai como mensagem RaidTrack: fica no ecrã do tracker até a equipa carregar OK, e volta a confirmação de leitura
+  const m: Msg = { t: Date.now(), from: myNum, to: dest, text, dir: "out", st: "a enviar", id: newId(), reads: {} };
   raid.msgs.push(m); renderMsgs();
   log("msg", `Base → ${nameOf(dest)}: ${text}`);
-  try { await link.sendText(text, dest); m.st = dest === "all" ? "enviada" : "entregue"; }
+  try { await link.sendPrivate(encodeText(m.id!, oledText(text)), dest); m.st = dest === "all" ? "enviada" : "entregue"; }
   catch { m.st = "falhou"; toast(`Mensagem para ${nameOf(dest)} não foi confirmada`, "warn"); }
   renderMsgs(); save();
 }
@@ -380,14 +478,9 @@ function download(name: string, text: string, type: string) {
 }
 function exportRaid() {
   if (DEMO_BUILD) return toast("Na app real, Exportar descarrega os percursos (GPX) e o registo do raid (CSV).");
-  const day = new Date(raid.started).toISOString().slice(0, 10);
-  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="RaidTrack" xmlns="http://www.topografix.com/GPX/1/1">\n` +
-    teams().map((t) => `<trk><name>${esc(t.short)} ${esc(t.long)}</name><trkseg>\n` +
-      t.track.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}"><time>${new Date(p[2]).toISOString()}</time></trkpt>`).join("\n") +
-      `\n</trkseg></trk>`).join("\n") + `\n</gpx>\n`;
-  download(`raid-${day}-percursos.gpx`, gpx, "application/gpx+xml");
+  download(`${fileBase()}-percursos.gpx`, gpxText(), "application/gpx+xml");
   const csv = "hora;tipo;evento\n" + raid.log.map((e) => `${new Date(e.t).toLocaleString("pt-PT")};${e.kind};"${e.text.replace(/"/g, '""')}"`).join("\n");
-  download(`raid-${day}-registo.csv`, "﻿" + csv, "text/csv");
+  download(`${fileBase()}-registo.csv`, "\ufeff" + csv, "text/csv");
 }
 
 // Descarregar mosaicos do mapa para usar sem Internet (guardados pelo service worker)
@@ -429,10 +522,151 @@ function setBase() {
 
 async function newRaid() {
   if (!(await ask("Começar um novo raid? Exporte primeiro os dados deste raid se os quiser guardar.", "Novo raid"))) return;
-  raid = { started: Date.now(), teams: {}, msgs: [], log: [], base: raid.base };
+  // mantém o planeamento (nome, percurso, zonas): pode ser removido no separador Raid
+  raid = { started: Date.now(), teams: {}, msgs: [], log: [], base: raid.base, name: raid.name, route: raid.route, zones: raid.zones, corridor: raid.corridor };
   markers.forEach((m) => m.remove()); markers.clear();
   tracks.forEach((p) => p.remove()); tracks.clear();
   fitted = false; save(); renderAll(); log("info", "Novo raid iniciado");
+}
+
+// ───────────────────────────── Zonas proibidas ─────────────────────────────
+const ZONE_REPEAT_MS = 5 * 60_000;
+function checkZones(t: Team) {
+  if (t.lat === undefined || !raid.zones?.length) return;
+  const p: LatLon = [t.lat, t.lon!];
+  t.inZones ??= {};
+  for (const z of raid.zones) {
+    const inside = inPolygon(p, z.poly);
+    const was = t.inZones[z.id];
+    if (inside && !was) {
+      t.inZones[z.id] = { id: newId(), since: Date.now(), sentAt: 0 };
+      log("zona", `${t.short} entrou na zona proibida "${z.name}"`);
+      toast(`${t.short} entrou na zona proibida "${z.name}"`, "warn");
+      beep(520, 300); setTimeout(() => beep(520, 300), 400); setTimeout(() => beep(520, 300), 800);
+      void sendZoneAlert(t, z);
+    } else if (!inside && was) {
+      delete t.inZones[z.id];
+      log("zona", `${t.short} saiu da zona proibida "${z.name}" (${fmtDur(Date.now() - was.since)} lá dentro)`);
+      toast(`${t.short} saiu da zona proibida "${z.name}"`, "ok");
+    }
+  }
+}
+async function sendZoneAlert(t: Team, z: Zone) {
+  const st = t.inZones?.[z.id];
+  if (!st || !link) return;
+  st.sentAt = Date.now();
+  try { await link.sendPrivate(encodeZone(st.id, oledText(`${z.name}. Saiam ja desta zona!`)), t.num); }
+  catch { toast(`O aviso de zona para ${t.short} não foi confirmado — volta a tentar`, "warn"); st.sentAt = Date.now() - ZONE_REPEAT_MS + 60_000; }
+}
+function zoneReminders() {
+  for (const t of teams()) for (const [zid, st] of Object.entries(t.inZones ?? {})) {
+    const z = raid.zones?.find((x) => x.id === zid);
+    if (!z) { delete t.inZones![zid]; continue; }
+    if (Date.now() - st.sentAt > ZONE_REPEAT_MS) void sendZoneAlert(t, z);
+  }
+}
+
+// ───────────────────────────── Separador Raid: percurso, zonas, relatório ─────────────────────────────
+let drawing: { name: string; pts: LatLon[]; line: L.Polyline } | null = null;
+function renderPlan() {
+  const ae = document.activeElement as HTMLElement | null;
+  const typing = ae && ae.tagName === "INPUT" && ae.closest("#pane-raid");
+  if (!typing) {
+    $<HTMLInputElement>("#raidName").value = raid.name ?? "";
+    $<HTMLInputElement>("#corridor").value = String(raid.corridor ?? 50);
+  }
+  const r = raid.route;
+  $("#routeInfo").innerHTML = r
+    ? `<b>${esc(r.name)}</b> · ${fmtKm(lineLength(r.pts))}${r.wpts.length ? ` · ${r.wpts.length} posto${r.wpts.length > 1 ? "s" : ""}` : ""}`
+    : "Sem percurso teórico. Importe um ficheiro GPX.";
+  ($("#routeClear") as HTMLButtonElement).hidden = !r;
+  const zs = raid.zones ?? [];
+  $("#zoneList").innerHTML = zs.length
+    ? zs.map((z) => `<li data-zid="${z.id}"><span>${esc(z.name)}</span><button data-act="zview">Ver</button><button data-act="zdel">Apagar</button></li>`).join("")
+    : `<li class="empty">Sem zonas proibidas.</li>`;
+  $("#zoneDraw").hidden = !!drawing;
+  $("#zoneDrawing").hidden = !drawing;
+  if (drawing) $("#zoneDrawHint").textContent = `A desenhar "${drawing.name}": ${drawing.pts.length} ponto${drawing.pts.length === 1 ? "" : "s"}. Clique no mapa para marcar os cantos.`;
+}
+function startZone() {
+  const name = $<HTMLInputElement>("#zoneName").value.trim() || `Zona ${(raid.zones?.length ?? 0) + 1}`;
+  drawing = { name, pts: [], line: L.polyline([], { color: "#b91c1c", weight: 2, dashArray: "4 4" }).addTo(map) };
+  document.body.classList.add("drawing");
+  renderPlan();
+  toast("Clique no mapa para marcar os cantos da zona; no fim carregue em Concluir.");
+}
+function finishZone(keep = true) {
+  if (!drawing) return;
+  if (keep && drawing.pts.length < 3) { toast("Uma zona precisa de pelo menos 3 pontos", "warn"); return; }
+  drawing.line.remove();
+  if (keep) {
+    raid.zones ??= [];
+    raid.zones.push({ id: `z${Date.now().toString(36)}`, name: drawing.name, poly: drawing.pts });
+    log("info", `Zona proibida criada: ${drawing.name}`);
+    $<HTMLInputElement>("#zoneName").value = "";
+  }
+  drawing = null;
+  document.body.classList.remove("drawing");
+  if (keep) teams().forEach(checkZones);
+  drawPlan(); renderPlan(); renderTeams(); save();
+}
+map.on("click", (e) => {
+  if (!drawing) return;
+  drawing.pts.push([e.latlng.lat, e.latlng.lng]);
+  drawing.line.setLatLngs([...drawing.pts, drawing.pts[0]]);
+  renderPlan();
+});
+async function importRoute(f: File) {
+  try {
+    const g = parseGpx(await f.text());
+    raid.route = { name: g.name, pts: g.route, wpts: g.waypoints };
+    if (!raid.name) raid.name = g.name;
+    log("info", `Percurso importado: ${g.name} (${fmtKm(lineLength(g.route))})`);
+    drawPlan(); renderPlan(); renderTeams(); save();
+    map.fitBounds(L.latLngBounds(g.route).pad(0.2));
+    toast(`Percurso "${g.name}" importado`, "ok");
+  } catch (e) { toast((e as Error).message, "warn"); }
+}
+
+function gpxText(): string {
+  const parts = [`<?xml version="1.0" encoding="UTF-8"?>`,
+    `<gpx version="1.1" creator="RaidTrack" xmlns="http://www.topografix.com/GPX/1/1">`,
+    `<metadata><name>${esc(raid.name || "Raid")}</name><time>${new Date(raid.started).toISOString()}</time></metadata>`];
+  for (const w of raid.route?.wpts ?? []) parts.push(`<wpt lat="${w.lat}" lon="${w.lon}"><name>${esc(w.name)}</name></wpt>`);
+  if (raid.route) parts.push(`<trk><name>Percurso teórico: ${esc(raid.route.name)}</name><trkseg>`, ...raid.route.pts.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}"/>`), `</trkseg></trk>`);
+  for (const t of teams()) {
+    parts.push(`<trk><name>${esc(t.short)} ${esc(t.long)}</name><trkseg>`);
+    parts.push(...t.track.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}"><time>${new Date(p[2]).toISOString()}</time></trkpt>`));
+    parts.push(`</trkseg></trk>`);
+  }
+  parts.push(`</gpx>`, "");
+  return parts.join("\n");
+}
+const fileBase = () => `${(raid.name || "raid").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "raid"}-${new Date(raid.started).toISOString().slice(0, 10)}`;
+function saveGpx() {
+  if (DEMO_BUILD) return toast("Na app real, descarrega um GPX com o percurso teórico e os percursos de todas as equipas.");
+  download(`${fileBase()}-percursos.gpx`, gpxText(), "application/gpx+xml");
+}
+async function makeReport() {
+  if (!teams().length) return toast("Ainda não há equipas para o relatório", "warn");
+  const btn = $<HTMLButtonElement>("#btnReport");
+  btn.disabled = true; btn.textContent = "A gerar…";
+  try {
+    const { buildReport } = await import("./report");
+    const pdf = await buildReport(raid, teams(), teamStats, (m) => (btn.textContent = m));
+    const url = URL.createObjectURL(pdf);
+    if (DEMO_BUILD) {
+      // a página de demonstração não descarrega ficheiros: mostra o PDF numa janela por cima
+      $<HTMLIFrameElement>("#pdfFrame").src = url;
+      $("#pdfView").hidden = false;
+    } else {
+      const a = document.createElement("a");
+      a.href = url; a.download = `${fileBase()}-relatorio.pdf`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast("Relatório PDF descarregado", "ok");
+    }
+  } catch (e) { toast(`Não foi possível gerar o relatório: ${(e as Error).message}`, "warn"); }
+  finally { btn.disabled = false; btn.textContent = "Relatório PDF"; }
 }
 
 // ───────────────────────────── Ligações da interface ─────────────────────────────
@@ -454,12 +688,33 @@ $("#teams").addEventListener("click", (e) => {
   const card = (e.target as HTMLElement).closest<HTMLElement>(".team");
   if (!card) return;
   const num = Number(card.dataset.num);
+  if ((e.target as HTMLElement).closest(".times label")) return; // a escrever uma hora
   const act = (e.target as HTMLElement).closest<HTMLElement>("button")?.dataset.act;
   if (act === "locate") void ping(num);
+  else if (act === "startNow" || act === "endNow") {
+    const t = raid.teams[num];
+    if (act === "startNow") { t.start = Date.now(); log("info", `${t.short} partiu às ${hhmm(t.start)}`); }
+    else { t.end = Date.now(); log("info", `${t.short} chegou às ${hhmm(t.end)}`); }
+    renderTeams(); save();
+  }
   else if (act === "center") center(num);
   else if (act === "msg") { showTab("msgs"); $<HTMLSelectElement>("#msgTo").value = String(num); $<HTMLInputElement>("#msgText").focus(); }
   else { select(num); center(num); }
 });
+$("#teams").addEventListener("change", (e) => {
+  const inp = e.target as HTMLInputElement;
+  const which = inp.dataset.time as "start" | "end" | undefined;
+  const card = inp.closest<HTMLElement>(".team");
+  if (!which || !card) return;
+  const t = raid.teams[Number(card.dataset.num)];
+  const raw = inp.value.trim().replace(/[h.]/, ":").replace(/^(\d{1,2})(\d{2})$/, "$1:$2");
+  const v = raw ? fromTime(raw, which === "end" ? t.start : undefined) : undefined;
+  if (raw && v === undefined) { toast("Hora inválida: use hh:mm (ex. 09:30)", "warn"); inp.value = toTime(t[which]); return; }
+  t[which] = v;
+  if (v) log("info", `${t.short}: ${which === "start" ? "partida" : "chegada"} às ${hhmm(v)}`);
+  save();
+});
+$("#teams").addEventListener("focusout", () => setTimeout(() => { if (!document.activeElement?.closest("#teams")) renderTeams(); }, 0));
 $("#sos").addEventListener("click", (e) => {
   const card = (e.target as HTMLElement).closest<HTMLElement>(".sosCard");
   const act = (e.target as HTMLElement).closest<HTMLElement>("button")?.dataset.act;
@@ -484,12 +739,44 @@ document.querySelectorAll<HTMLButtonElement>(".quick button").forEach((b) => (b.
   void sendMsg(b.textContent!, v === "all" ? "all" : Number(v));
 }));
 
+$<HTMLInputElement>("#raidName").onchange = (e) => { raid.name = (e.target as HTMLInputElement).value.trim(); save(); };
+$<HTMLInputElement>("#corridor").onchange = (e) => {
+  const v = Math.round(Number((e.target as HTMLInputElement).value));
+  raid.corridor = Number.isFinite(v) && v >= 5 && v <= 1000 ? v : 50;
+  (e.target as HTMLInputElement).value = String(raid.corridor);
+  renderTeams(); save();
+};
+$<HTMLInputElement>("#routeFile").onchange = (e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) void importRoute(f); (e.target as HTMLInputElement).value = ""; };
+$("#routeClear").onclick = () => void ask("Remover o percurso teórico deste raid?", "Remover").then((ok) => { if (!ok) return; raid.route = undefined; drawPlan(); renderPlan(); renderTeams(); save(); });
+$("#zoneDrawBtn").onclick = startZone;
+$("#zoneDone").onclick = () => finishZone(true);
+$("#zoneCancel").onclick = () => finishZone(false);
+$("#zoneUndo").onclick = () => { if (drawing?.pts.length) { drawing.pts.pop(); drawing.line.setLatLngs(drawing.pts.length ? [...drawing.pts, drawing.pts[0]] : []); renderPlan(); } };
+$("#zoneList").addEventListener("click", (e) => {
+  const li = (e.target as HTMLElement).closest<HTMLElement>("li[data-zid]");
+  const act = (e.target as HTMLElement).closest<HTMLElement>("button")?.dataset.act;
+  const z = raid.zones?.find((x) => x.id === li?.dataset.zid);
+  if (!z || !act) return;
+  if (act === "zview") map.fitBounds(L.latLngBounds(z.poly).pad(0.5));
+  if (act === "zdel") void ask(`Apagar a zona proibida "${z.name}"?`, "Apagar").then((ok) => {
+    if (!ok) return;
+    raid.zones = raid.zones!.filter((x) => x !== z);
+    teams().forEach((t) => { if (t.inZones) delete t.inZones[z.id]; });
+    log("info", `Zona proibida apagada: ${z.name}`);
+    drawPlan(); renderPlan(); renderTeams(); save();
+  });
+});
+$("#btnGpx").onclick = saveGpx;
+$("#btnReport").onclick = () => void makeReport();
+$("#pdfClose").onclick = () => { $("#pdfView").hidden = true; const f = $<HTMLIFrameElement>("#pdfFrame"); URL.revokeObjectURL(f.src); f.src = "about:blank"; };
+
 // Relógio do raid e envelhecimento dos estados
 setInterval(() => {
   const s = Math.floor((Date.now() - raid.started) / 1000);
   $("#clock").textContent = `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}`;
   renderTeams();
   teams().forEach((t) => markers.get(t.num)?.setIcon(icon(t)));
+  zoneReminders();
 }, 10_000);
 
 // Funcionalidades disponíveis neste browser
@@ -505,6 +792,13 @@ if (DEMO_BUILD) {
   $("#demoTag").hidden = false;
   $("#lnkSetup").hidden = true; // a preparação de rádios não funciona dentro da demonstração
   raid.base = [39.6965, -8.2924]; // base fictícia no centro da zona
-  void connect("demo").then(() => setTimeout(() => { fitted = false; fitAll(); renderAll(); }, 900));
+  raid.name = "Raid de demonstração";
+  raid.route = { name: "Percurso dos 3 postos", pts: DEMO_ROUTE, wpts: DEMO_WPTS };
+  raid.zones = [{ id: "zdemo", name: "Estrada nacional", poly: DEMO_ZONE }];
+  void connect("demo").then(() => setTimeout(() => {
+    // equipas a andar partiram no início do rasto
+    teams().forEach((t) => { if (t.track.length && Date.now() - (t.heard ?? 0) < 120_000) t.start = t.track[0][2]; });
+    fitted = false; fitAll(); renderAll();
+  }, 900));
 }
 (window as unknown as { raidtrack: unknown }).raidtrack = { get raid() { return raid; } }; // diagnóstico na consola
