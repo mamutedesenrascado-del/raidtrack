@@ -179,7 +179,10 @@ async function run(withFlash: boolean) {
     }
   } catch (e) {
     progress(0, "");
-    label.innerHTML = `<span class="bad">Não foi possível concluir:</span> ${(e as Error).message}`;
+    const msg = (e as Error).message;
+    label.innerHTML = /Failed to connect/i.test(msg)
+      ? `<span class="bad">O rádio não entrou em modo de gravação.</span> Ponha-o em modo de gravação à mão: mantenha premido <b>BOOT</b>, carregue e largue <b>RST</b>, largue <b>BOOT</b>. Depois carregue de novo em <b>Gravar e configurar</b> e escolha a porta outra vez. No fim da gravação carregue em <b>RST</b> uma vez.`
+      : `<span class="bad">Não foi possível concluir:</span> ${msg}`;
     log(String((e as Error).stack ?? e));
   } finally {
     setBusy(false);
