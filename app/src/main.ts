@@ -213,7 +213,8 @@ function fromTime(v: string, after?: number): number | undefined {
 }
 /** Estatísticas de uma equipa entre a partida e a chegada (ou todo o rasto) */
 function teamStats(t: Team) {
-  const tr = clip(t.track, t.start, t.end);
+  // sem hora de partida, conta desde o início do raid (pontos antigos guardados antes desta correção ficam de fora)
+  const tr = clip(t.track, t.start ?? raid.started, t.end);
   const first = tr[0]?.[2], last = tr[tr.length - 1]?.[2];
   const t0 = t.start ?? first, t1 = t.end ?? (t.start ? Date.now() : last);
   return {
@@ -350,7 +351,12 @@ const events: LinkEvents = {
   position(n, lat, lon, when) {
     if (n === myNum) return;
     const t = team(n);
+    // Ao ligar, o rádio da base devolve a última posição que conhece de cada nó, que pode ser de dias antes:
+    // serve para pôr a equipa no mapa, mas não entra no rasto nem nos alertas de zona.
+    const stale = when < raid.started || (t.posAt !== undefined && when < t.posAt);
+    if (stale && t.posAt !== undefined) return;
     t.lat = lat; t.lon = lon; t.posAt = when; t.heard = Math.max(t.heard ?? 0, when);
+    if (stale) { drawTeam(t); renderTeams(); save(); return; }
     const last = t.track[t.track.length - 1];
     if (!last || last[0] !== lat || last[1] !== lon) t.track.push([lat, lon, when]);
     checkZones(t);
@@ -795,6 +801,7 @@ if (DEMO_BUILD) {
   $("#demoTag").hidden = false;
   $("#lnkSetup").hidden = true; // a preparação de rádios não funciona dentro da demonstração
   raid.base = [39.6965, -8.2924]; // base fictícia no centro da zona
+  raid.started = Date.now() - 20 * 60_000; // o simulador traz rasto dos últimos minutos
   raid.name = "Raid de demonstração";
   raid.route = { name: "Percurso dos 3 postos", pts: DEMO_ROUTE, wpts: DEMO_WPTS };
   raid.zones = [{ id: "zdemo", name: "Estrada nacional", poly: DEMO_ZONE }];

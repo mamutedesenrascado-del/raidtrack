@@ -141,7 +141,15 @@ async function drawMap(w: number, h: number, L: MapLayers): Promise<string> {
 }
 
 // ───────────── PDF ─────────────
-const hhmm = (ms?: number) => (ms ? new Date(ms).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" }) : "—");
+// As letras base do PDF (Helvetica) só têm os caracteres do Windows-1252: o resto (→, emojis…) saía como lixo.
+const CP1252 = "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ";
+function pdfSafe(s: string): string {
+  return s.normalize("NFC").replace(/→/g, "->").replace(/←/g, "<-").replace(/[≤]/g, "<=").replace(/[≥]/g, ">=")
+    .replace(/[^\n\x20-\x7e\xa0-\xff]/gu, (c) => (CP1252.includes(c) ? c : ""));
+}
+/** Hora; com data se o raid passar a meia-noite */
+let multiDay = false;
+const hhmm = (ms?: number) => (ms ? new Date(ms).toLocaleString("pt-PT", multiDay ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }) : "—");
 const pct = (v?: number) => (v === undefined ? "—" : `${Math.round(v)} %`);
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const eventsOf = (t: Team, log: LogEv[]) => {
@@ -154,11 +162,25 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
   offline = noTiles;
   const maps: Report["maps"] = [], rows: string[][] = [];
   const doc = new jsPDF({ unit: "mm", format: "a4" });
+  type Txt = string | string[];
+  const clean = (t: Txt): Txt => (Array.isArray(t) ? t.map(pdfSafe) : pdfSafe(t));
+  const rawText = doc.text.bind(doc), rawSplit = doc.splitTextToSize.bind(doc);
+  (doc as unknown as { text: (t: Txt, ...a: unknown[]) => unknown }).text = (t, ...a) => (rawText as (t: Txt, ...a: unknown[]) => unknown)(clean(t), ...a);
+  (doc as unknown as { splitTextToSize: (t: string, w: number) => string[] }).splitTextToSize = (t, w) => rawSplit(pdfSafe(t), w);
   const W = 210, M = 14;
   const title = raid.name || "Raid";
   const day = new Date(raid.started).toLocaleDateString("pt-PT", { day: "numeric", month: "long", year: "numeric" });
   const list = [...teams].sort((a, b) => a.short.localeCompare(b.short));
   const stats = new Map(list.map((t) => [t.num, statsOf(t)]));
+  {
+    const times = [raid.started, ...raid.log.map((e) => e.t), ...[...stats.values()].flatMap((s) => s.track.map((p) => p[2])), ...list.flatMap((t) => [t.start ?? 0, t.end ?? 0]).filter(Boolean)];
+    const d = (ms: number) => new Date(ms).toDateString();
+    multiDay = new Set(times.map(d)).size > 1;
+  }
+  // hora mostrada: a indicada na base ou, sem ela, a do primeiro/último ponto do rasto
+  const t0 = (t: Team) => t.start ?? stats.get(t.num)!.track[0]?.[2];
+  const t1 = (t: Team) => t.end ?? (t.start ? undefined : stats.get(t.num)!.track.at(-1)?.[2]);
+  const early = (t: Team) => raid.log.filter((e) => e.t >= raid.started && eventsOf(t, [e]).length);
   const zones = raid.zones ?? [];
   const route = raid.route;
   const corridor = raid.corridor ?? 50;
@@ -234,9 +256,10 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
     const st = stats.get(t.num)!;
     const ev = eventsOf(t, raid.log);
     const zoneIn = ev.filter((e) => e.kind === "zona" && e.text.includes("entrou")).length;
-    const sos = ev.filter((e) => e.kind === "sos" && e.text.startsWith("SOS de")).length;
+    const sosRe = new RegExp(`^SOS de ${reEsc(t.short)}( \\(sem GPS\\))?$`);
+    const sos = ev.filter((e) => e.kind === "sos" && sosRe.test(e.text)).length;
     const cells = [
-      `${t.short}${t.long ? ` ${t.long}` : ""}`, hhmm(t.start), hhmm(t.end),
+      `${t.short}${t.long ? ` ${t.long}` : ""}`, hhmm(t0(t)) + (t.start || !t0(t) ? "" : "*"), hhmm(t1(t)) + (t.end || !t1(t) ? "" : "*"),
       st.duration !== undefined ? fmtDur(st.duration) : "—", fmtKm(st.distance),
       ...(route ? [pct(st.adh?.onRoutePct), pct(st.adh?.coveragePct)] : []),
       String(zoneIn), sos ? `${sos}` : "0",
@@ -248,7 +271,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
   y += 2;
   doc.setFontSize(7.5); doc.setTextColor(107, 114, 128);
   const notes = [
-    "Distância e duração contam entre a hora de partida e de chegada indicadas na base (sem horas: todo o rasto registado). Saltos de GPS impossíveis a pé são ignorados.",
+    "Distância e duração contam entre a hora de partida e de chegada indicadas na base. * = hora não indicada na base: usa o primeiro/último ponto do rasto desde o início do raid. Saltos de GPS impossíveis a pé são ignorados.",
     ...(route ? [`"No percurso": parte da distância percorrida feita a menos de ${corridor} m do percurso teórico. "Cobertura": parte do percurso teórico por onde a equipa passou.`] : []),
   ];
   for (const n of notes) { const l = doc.splitTextToSize(n, W - 2 * M); if (y + l.length * 3.4 > 285) break; doc.text(l, M, y); y += l.length * 3.4 + 1; }
@@ -262,8 +285,8 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
     doc.setFillColor(r, g, b); doc.rect(0, 22, W, 1.6, "F");
     y = 32;
     const cells: [string, string][] = [
-      ["Partida", hhmm(t.start ?? st.track[0]?.[2])],
-      ["Chegada", hhmm(t.end ?? (t.start ? undefined : st.track[st.track.length - 1]?.[2]))],
+      ["Partida", hhmm(t0(t))],
+      ["Chegada", hhmm(t1(t))],
       ["Duração", st.duration !== undefined ? fmtDur(st.duration) : "—"],
       ["Distância", fmtKm(st.distance)],
     ];
@@ -273,7 +296,7 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
     y += 12;
     doc.setFontSize(8.5); doc.setTextColor(75, 85, 99);
     const extra: string[] = [];
-    if (!t.start || !t.end) extra.push(!t.start && !t.end ? "Sem horas de partida/chegada: valores calculados com todo o rasto." : !t.end ? "Sem hora de chegada." : "Sem hora de partida.");
+    if (!t.start || !t.end) extra.push(!t.start && !t.end ? "Sem horas de partida/chegada indicadas na base: valores calculados com o rasto desde o início do raid." : !t.end ? "Sem hora de chegada." : "Sem hora de partida.");
     if (route && st.adh) extra.push(`Maior afastamento ao percurso: ${fmtKm(st.adh.maxDev)} · fora do corredor: ${fmtKm(st.adh.offRouteM)}`);
     if (t.bat !== undefined) extra.push(`Bateria no último contacto: ${t.bat} %`);
     for (const l of extra) { doc.text(l, M, y); y += 4.5; }
@@ -290,17 +313,17 @@ export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, pro
     doc.text(`P = partida · C = chegada${route ? " · tracejado = percurso teórico" : ""}${zones.length ? " · vermelho = zona proibida" : ""}`, M, y); y += 7;
 
     // eventos
-    const ev = eventsOf(t, raid.log).filter((e) => !t.start || e.t >= t.start - 30 * 60_000);
+    const ev = early(t).filter((e) => !t.start || e.t >= t.start - 30 * 60_000);
     doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.setTextColor(17, 24, 39);
     doc.text("Eventos", M, y); y += 5.5;
     doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
     if (!ev.length) { doc.setTextColor(107, 114, 128); doc.text("Sem eventos registados.", M, y); }
     for (const e of ev) {
-      const lines = doc.splitTextToSize(e.text, W - 2 * M - 30);
+      const lines = doc.splitTextToSize(e.text, W - 2 * M - (multiDay ? 26 : 16));
       if (y + lines.length * 4 > 284) { doc.addPage(); header(`Equipa ${t.short} (cont.)`); y = 32; doc.setFontSize(8.5); }
       doc.setTextColor(107, 114, 128); doc.text(hhmm(e.t), M, y);
       const col = e.kind === "sos" || e.kind === "zona" ? [185, 28, 28] : [17, 24, 39];
-      doc.setTextColor(col[0], col[1], col[2]); doc.text(lines, M + 14, y);
+      doc.setTextColor(col[0], col[1], col[2]); doc.text(lines, M + (multiDay ? 24 : 14), y);
       y += lines.length * 4 + 0.8;
     }
   }

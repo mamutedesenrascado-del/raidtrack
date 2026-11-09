@@ -1,5 +1,5 @@
 // RaidTrack — service worker: app disponível sem Internet + mosaicos do mapa em cache
-const APP = "raidtrack-app-v2";
+const APP = "raidtrack-app-v3";
 const TILES = "raidtrack-tiles-v1";
 
 self.addEventListener("install", (e) => {
@@ -15,12 +15,17 @@ self.addEventListener("fetch", (e) => {
 
   // Mosaicos: cache primeiro (funciona no campo sem rede)
   if (/tile\.(opentopomap|openstreetmap)\.org$/.test(url.hostname)) {
+    // O relatório PDF pede mosaicos em modo CORS para os desenhar num canvas: uma resposta "opaca" (no-cors)
+    // guardada pelo mapa não serve para isso, por isso estes ficam numa entrada à parte.
+    const cors = e.request.mode === "cors";
+    const key = cors ? e.request.url + "#cors" : e.request.url;
     e.respondWith(caches.open(TILES).then(async (c) => {
-      const hit = await c.match(e.request.url);
+      const hit = await c.match(key);
       if (hit) return hit;
       try {
-        const r = await fetch(e.request.url, { mode: "no-cors" });
-        c.put(e.request.url, r.clone());
+        const r = await fetch(e.request.url, { mode: cors ? "cors" : "no-cors" });
+        if (cors && !r.ok) return r;
+        c.put(key, r.clone());
         return r;
       } catch { return new Response("", { status: 504 }); }
     }));
