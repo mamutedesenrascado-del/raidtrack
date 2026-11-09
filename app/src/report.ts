@@ -13,15 +13,32 @@ const px = (lat: number, lon: number, z: number): [number, number] => {
   return [((lon + 180) / 360) * s, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * s];
 };
 
-function loadTile(z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+// Fontes de mosaicos, por ordem. O "?pdf" separa estes pedidos (CORS, para desenhar no canvas) dos do mapa
+// da app (sem CORS): sem isso o browser pode reutilizar a cópia sem CORS em cache e o desenho falha.
+const SOURCES: { url: (z: number, x: number, y: number) => string; attr: string }[] = [
+  { url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png?pdf=1`, attr: "© OpenStreetMap contributors" },
+  { url: (z, x, y) => `https://${"abcd"[(x + y) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`, attr: "© OpenStreetMap contributors © CARTO" },
+];
+let source = 0; // muda para a fonte seguinte se a primeira falhar
+
+function loadImg(src: string): Promise<HTMLImageElement | null> {
   return new Promise((res) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    const timer = setTimeout(() => res(null), 5000);
+    img.referrerPolicy = "strict-origin-when-cross-origin";
+    const timer = setTimeout(() => res(null), 8000);
     img.onload = () => { clearTimeout(timer); res(img); };
     img.onerror = () => { clearTimeout(timer); res(null); };
-    img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    img.src = src;
   });
+}
+async function loadTile(z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+  for (let i = source; i < SOURCES.length; i++) {
+    const img = await loadImg(SOURCES[i].url(z, x, y));
+    if (img) { if (i !== source) { console.warn(`RaidTrack relatório: mosaicos de ${SOURCES[source].attr} falharam, a usar ${SOURCES[i].attr}`); source = i; } return img; }
+  }
+  console.warn(`RaidTrack relatório: mosaico ${z}/${x}/${y} não carregou em nenhuma fonte`);
+  return null;
 }
 
 interface MapLayers {
@@ -59,10 +76,12 @@ async function drawMap(w: number, h: number, L: MapLayers): Promise<string> {
   const tx0 = Math.floor(ox / TILE), ty0 = Math.floor(oy / TILE), tx1 = Math.floor((ox + w) / TILE), ty1 = Math.floor((oy + h) / TILE);
   const jobs: Promise<void>[] = [];
   let ok = 0, total = 0;
+  // o primeiro mosaico sozinho escolhe a fonte que funciona; os restantes vão em paralelo
+  const first = offline ? null : await loadTile(z, tx0, ty0);
   for (let x = tx0; x <= tx1; x++) for (let y = ty0; y <= ty1; y++) {
     total++;
     if (offline) continue;
-    jobs.push(loadTile(z, x, y).then((img) => { if (img) { ok++; g.drawImage(img, x * TILE - ox, y * TILE - oy); } }));
+    jobs.push((x === tx0 && y === ty0 ? Promise.resolve(first) : loadTile(z, x, y)).then((img) => { if (img) { ok++; g.drawImage(img, x * TILE - ox, y * TILE - oy); } }));
   }
   await Promise.all(jobs);
   let tainted = false;
@@ -133,7 +152,7 @@ async function drawMap(w: number, h: number, L: MapLayers): Promise<string> {
     k.font = "18px sans-serif"; k.fillText(nice >= 1000 ? `${nice / 1000} km` : `${nice} m`, bx, by - 8);
     // créditos
     k.font = "15px sans-serif"; k.fillStyle = "rgba(255,255,255,0.85)";
-    const attr = noTiles ? "Sem mapa de fundo (sem Internet)" : "© OpenStreetMap contributors";
+    const attr = noTiles ? (offline ? "Sem mapa de fundo (demonstração)" : "Sem mapa de fundo (os mosaicos não carregaram)") : SOURCES[source].attr;
     const aw = k.measureText(attr).width;
     k.fillRect(w - aw - 16, h - 24, aw + 16, 24); k.fillStyle = "#374151"; k.fillText(attr, w - aw - 8, h - 7);
     return cv.toDataURL("image/jpeg", 0.88);
@@ -160,6 +179,7 @@ const eventsOf = (t: Team, log: LogEv[]) => {
 export interface Report { pdf: Blob; pages: number; head: string[]; rows: string[][]; maps: { title: string; img: string }[] }
 export async function buildReport(raid: Raid, teams: Team[], statsOf: Stats, progress: (m: string) => void, noTiles = false): Promise<Report> {
   offline = noTiles;
+  source = 0;
   const maps: Report["maps"] = [], rows: string[][] = [];
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   type Txt = string | string[];
