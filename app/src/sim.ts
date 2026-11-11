@@ -2,6 +2,7 @@
 import type { Dest, Link, LinkEvents } from "./link";
 import { decode, encodeRead, encodeSos, PORT_PRIVATE } from "./protocol";
 import { dist, type LatLon } from "./geo";
+import type { Plan } from "./types";
 
 const BASE = 0x0ba5e000;
 const CENTRO = { lat: 39.6965, lon: -8.2924 };
@@ -15,6 +16,28 @@ export const DEMO_WPTS = [
   { name: "Posto 1", lat: 39.6990, lon: -8.2900 }, { name: "Posto 2", lat: 39.7004, lon: -8.2972 }, { name: "Posto 3", lat: 39.6958, lon: -8.2955 },
 ];
 export const DEMO_ZONE: LatLon[] = [[39.6926, -8.3006], [39.6926, -8.2974], [39.6904, -8.2974], [39.6904, -8.3006]];
+
+const hm = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
+/** Plano completo da demonstração: percurso com altitude, postos, zonas, equipas, segurança, mensagem programada */
+export function DEMO_PLAN(started: number): Plan {
+  return {
+    name: "Raid de demonstração", date: new Date(started).toISOString().slice(0, 10),
+    route: { name: "Percurso dos 3 postos", pts: DEMO_ROUTE, ele: [120, 138, 165, 172, 150, 131, 120], wpts: [] },
+    recon: [{ id: "rdemo", name: "Reconhecimento de sábado", pts: [[39.6965, -8.2924], [39.6991, -8.2903], [39.7010, -8.2926], [39.7006, -8.2950], [39.7004, -8.2972]] }],
+    posts: DEMO_WPTS.map((w, i) => ({ id: `pd${i + 1}`, ...w, radius: 40, notes: ["Nós e amarrações — Chefe Ana", "Orientação com bússola — Chefe Rui", "Primeiros socorros — Chefe Marta"][i] })),
+    zones: [
+      { id: "zdemo", name: "Estrada nacional", poly: DEMO_ZONE, kind: "proibida", notes: "Não atravessar" },
+      { id: "zrib", name: "Ribeira (margem alta)", kind: "perigo", warn: 150, notifyTracker: true, notes: "Não se aproximem da margem",
+        poly: [[39.6998, -8.2905], [39.7006, -8.2905], [39.7006, -8.2897], [39.6998, -8.2897]] },
+    ],
+    corridor: 50, speed: 8,
+    safety: { meet: "Largo da igreja", hospital: "Centro de Saúde (fictício) — 2xx xxx xxx", contacts: "112 · Chefe de raid 9xx xxx xxx" },
+    notes: "Plano fictício da demonstração.",
+    planTeams: ["Lobos", "Falcoes", "Linces", "Raposas", "Corujas"].map((n, i) => ({ id: `td${i}`, code: `EQ${i + 1}`, name: `Equipa ${i + 1} ${n}`, members: ["Ana, Bruno, Carla, Duarte", "Eva, Filipe, Gil, Hugo", "Inês, João, Luís", "Marta, Nuno, Olga", "Pedro, Rita, Sara"][i], start: hm(started) })),
+    sched: [{ id: "sdemo", at: hm(Date.now() + 120_000), text: "Lembrete: bebam agua e confirmem que estao todos", dest: "all" }],
+    alerts: { stillMin: 20, silentMin: 5, offMin: 3, bat: 20 },
+  };
+}
 
 /** Ponto a `s` metros do início de um caminho (ou null se já passou o fim) */
 function along(path: LatLon[], s: number): LatLon | null {
@@ -95,7 +118,9 @@ export function startSim(ev: LinkEvents): Link {
       }
       t.bat = Math.max(5, t.bat - 0.05);
       ev.position(t.num, t.lat, t.lon, Date.now());
-      ev.radio(t.num, 4 + Math.random() * 6, -95 - Math.random() * 20, Math.random() < 0.3 ? 1 : 0);
+      // sinal piora com a distância à base; longe passa por um repetidor
+      const d = dist([CENTRO.lat, CENTRO.lon], [t.lat, t.lon]);
+      ev.radio(t.num, 9 - d / 90 + (Math.random() - 0.5) * 3, Math.round(-80 - d / 25 - Math.random() * 8), d > 1100 ? 1 : 0);
     }
   });
   every(20000, () => live.forEach((t) => ev.battery(t.num, Math.round(t.bat))));

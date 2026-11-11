@@ -40,7 +40,7 @@
       <div class="tabs" role="tablist">
         <button data-tab="teams">Equipas <span id="teamCount" class="count">0</span></button>
         <button data-tab="msgs">Mensagens</button>
-        <button data-tab="raid">Raid</button>
+        <button data-tab="raid">Plano</button>
         <button data-tab="log">Registo</button>
       </div>
       <div class="pane" id="pane-teams"><div id="teams"></div></div>
@@ -57,34 +57,108 @@
       </div>
       <div class="pane" id="pane-raid" hidden>
         <section class="plan-sec">
-          <label class="fld">Nome do raid <input id="raidName" placeholder="ex. Raid Pioneiros 2026" /></label>
+          <h3>Plano do raid</h3>
+          <div class="grid2">
+            <label class="fld">Nome <input id="raidName" data-bind="name" placeholder="ex. Raid Pioneiros 2026" /></label>
+            <label class="fld">Data <input id="raidDate" data-bind="date" type="date" /></label>
+          </div>
+          <div class="row">
+            <label class="btn ghostBtn">Abrir plano<input id="planFile" type="file" accept=".raidtrack,application/json" hidden /></label>
+            <button id="planSave" class="primary">Guardar plano</button>
+          </div>
+          <label class="chk"><input id="planTiles" type="checkbox" checked /> Incluir o mapa da zona no ficheiro (para abrir sem Internet)</label>
+          <p class="muted small">O plano fica guardado neste computador enquanto edita. "Guardar plano" descarrega um ficheiro .raidtrack para continuar noutro dia, passar a outro chefe ou abrir no dia do raid, mesmo sem Internet. A chave do rádio não vai no ficheiro.</p>
         </section>
-        <section class="plan-sec">
-          <h3>Percurso teórico</h3>
+
+        <details class="plan-sec" open>
+          <summary>Percurso teórico</summary>
           <p id="routeInfo" class="muted"></p>
           <div class="row">
             <label class="btn">Importar GPX<input id="routeFile" type="file" accept=".gpx,application/gpx+xml" hidden /></label>
             <button id="routeClear" class="ghost" hidden>Remover</button>
           </div>
-          <label class="fld inline">Corredor <input id="corridor" type="number" min="5" max="1000" step="5" /> m
-            <small class="muted">a equipa conta como “no percurso” até esta distância</small></label>
-        </section>
-        <section class="plan-sec">
-          <h3>Zonas proibidas</h3>
-          <ul id="zoneList" class="zones"></ul>
+          <div class="grid2">
+            <label class="fld">Corredor (m) <input id="corridor" data-bind="corridor" data-num="5-1000" type="number" min="5" max="1000" step="5" /></label>
+            <label class="fld">Velocidade média (km/h) <input id="speed" data-bind="speed" data-num="1-8" type="number" min="1" max="8" step="0.5" /></label>
+          </div>
+          <p class="muted small">"No percurso" = a menos do corredor do percurso. Os tempos previstos usam a velocidade média e somam 1 h por cada 500 m de subida (se o GPX tiver altitude).</p>
+        </details>
+
+        <details class="plan-sec">
+          <summary>Reconhecimento <span id="reconCount" class="count"></span></summary>
+          <ul id="reconList" class="items"></ul>
+          <label class="btn ghostBtn">Importar GPX de reconhecimento<input id="reconFile" type="file" accept=".gpx,application/gpx+xml" multiple hidden /></label>
+          <p class="muted small">Aparece a azul no mapa, para comparar com o percurso teórico.</p>
+        </details>
+
+        <details class="plan-sec" open>
+          <summary>Postos <span id="postCount" class="count"></span></summary>
+          <ol id="postList" class="items posts"></ol>
+          <div class="row"><button id="postAdd" class="ghost">Adicionar posto no mapa</button></div>
+          <p class="muted small">A passagem fica registada quando a equipa chega a menos do raio do posto. A hora prevista conta a partir da partida de cada equipa.</p>
+        </details>
+
+        <details class="plan-sec" open>
+          <summary>Zonas proibidas e de perigo <span id="zoneCount" class="count"></span></summary>
+          <ul id="zoneList" class="items zones"></ul>
           <div id="zoneDraw" class="row">
             <input id="zoneName" placeholder="Nome (ex. Estrada nacional)" />
-            <button id="zoneDrawBtn" class="primary">Desenhar no mapa</button>
+            <select id="zoneKind" aria-label="Tipo de zona"><option value="proibida">Proibida</option><option value="perigo">Perigo</option></select>
+            <button id="zoneDrawBtn" class="primary">Desenhar</button>
           </div>
           <div id="zoneDrawing" hidden>
             <p id="zoneDrawHint" class="hint"></p>
             <div class="row"><button id="zoneDone" class="primary">Concluir</button><button id="zoneUndo" class="ghost">Desfazer ponto</button><button id="zoneCancel" class="ghost">Cancelar</button></div>
           </div>
-          <p class="muted small">Quando uma equipa entra numa zona, a base é avisada e o tracker apita e mostra o aviso até carregarem OK.</p>
-        </section>
+          <p class="muted small"><b>Proibida:</b> o tracker apita e mostra "ZONA PROIBIDA" até carregarem OK. <b>Perigo:</b> a base é avisada quando a equipa se aproxima (e o tracker, se marcar "avisar tracker").</p>
+        </details>
+
+        <details class="plan-sec">
+          <summary>Equipas previstas <span id="ptCount" class="count"></span></summary>
+          <ul id="ptList" class="items pteams"></ul>
+          <button id="ptAdd" class="ghost">Adicionar equipa</button>
+          <p class="muted small">O código tem de ser igual ao do tracker (ex. EQ1). A partida prevista serve para as horas previstas nos postos enquanto não indicar a partida real.</p>
+        </details>
+
+        <details class="plan-sec">
+          <summary>Segurança e notas</summary>
+          <label class="fld">Ponto de encontro <input data-bind="safety.meet" placeholder="ex. Igreja matriz, adro" /></label>
+          <label class="fld">Hospital / centro de saúde mais próximo <input data-bind="safety.hospital" placeholder="nome, morada, telefone" /></label>
+          <label class="fld">Contactos de emergência <textarea data-bind="safety.contacts" rows="3" placeholder="112 · Chefe de agrupamento 9xx xxx xxx · …"></textarea></label>
+          <label class="fld">Notas do raid <textarea data-bind="notes" rows="4" placeholder="Material, horários, avisos aos chefes de posto…"></textarea></label>
+        </details>
+
+        <details class="plan-sec">
+          <summary>Mensagens programadas <span id="schedCount" class="count"></span></summary>
+          <ul id="schedList" class="items sched"></ul>
+          <div class="row sched-add">
+            <input id="schedAt" placeholder="hh:mm" maxlength="5" inputmode="numeric" aria-label="Hora" />
+            <select id="schedDest" aria-label="Destino"></select>
+          </div>
+          <div class="row"><input id="schedText" maxlength="160" placeholder="Texto (ex. Regressem à base)" /><button id="schedAddBtn" class="ghost">Programar</button></div>
+          <p class="muted small">Enviadas sozinhas a essa hora, com o rádio ligado. Ficam no ecrã do tracker até OK.</p>
+        </details>
+
+        <details class="plan-sec">
+          <summary>Alertas</summary>
+          <div class="grid2">
+            <label class="fld">Equipa parada há (min) <input data-bind="alerts.stillMin" data-num="0-240" type="number" min="0" step="5" /></label>
+            <label class="fld">Sem contacto há (min) <input data-bind="alerts.silentMin" data-num="0-240" type="number" min="0" step="5" /></label>
+            <label class="fld">Fora do percurso há (min) <input data-bind="alerts.offMin" data-num="0-240" type="number" min="0" step="5" /></label>
+            <label class="fld">Bateria abaixo de (%) <input data-bind="alerts.bat" data-num="0-100" type="number" min="0" max="100" step="5" /></label>
+          </div>
+          <p class="muted small">0 desliga o alerta. Só contam equipas que já partiram e ainda não chegaram. Parada junto a um posto não dá alerta.</p>
+        </details>
+
         <section class="plan-sec">
-          <h3>Final do raid</h3>
-          <div class="row"><button id="btnReport" class="primary">Relatório PDF</button><button id="btnGpx" class="ghost">GPX de todas as equipas</button></div>
+          <h3>Durante e depois do raid</h3>
+          <div class="row">
+            <button id="btnReport" class="primary">Relatório PDF</button>
+            <button id="btnGpx" class="ghost">GPX de todas as equipas</button>
+            <button id="btnReplay" class="ghost">Rever o raid</button>
+            <button id="btnCov" class="ghost" aria-pressed="false">Cobertura rádio</button>
+          </div>
+          <div id="covLegend" class="legend" hidden><span class="c1"></span>bom <span class="c2"></span>razoável <span class="c3"></span>fraco <span class="c4"></span>no limite <span class="c0"></span>por repetidor</div>
           <p class="muted small">Indique a hora de partida e chegada de cada equipa no separador Equipas: a distância, o tempo e a % no percurso contam só entre essas horas.</p>
         </section>
       </div>
@@ -96,6 +170,13 @@
       <p id="askText"></p>
       <div class="askBtns"><button id="askNo" class="ghost">Cancelar</button><button id="askOk" class="primary">Confirmar</button></div>
     </div>
+  </div>
+  <div id="replay" class="replay" hidden>
+    <button id="rpPlay" class="primary" aria-label="Reproduzir">▶</button>
+    <input id="rpSlider" type="range" min="0" max="1000" value="0" aria-label="Momento do raid" />
+    <time id="rpTime">--:--</time>
+    <select id="rpSpeed" aria-label="Velocidade"><option value="30">×30</option><option value="120" selected>×120</option><option value="600">×600</option></select>
+    <button id="rpClose" class="ghost">Fechar</button>
   </div>
   <div id="pdfView" class="pdfView" hidden role="dialog" aria-modal="true" aria-label="Relatório">
     <div class="pdfBox"><div class="pdfBar"><b>Relatório do raid (pré-visualização)</b><button id="pdfClose" class="ghost">Fechar</button></div><div id="pdfBody" class="pdfBody"></div></div>

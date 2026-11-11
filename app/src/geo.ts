@@ -130,24 +130,29 @@ export function adherence(raw: TrackPt[], route: LatLon[], corridor: number): Ad
   };
 }
 
-export interface Gpx { name: string; route: LatLon[]; waypoints: { name: string; lat: number; lon: number }[] }
+export interface Gpx { name: string; route: LatLon[]; ele?: number[]; waypoints: { name: string; lat: number; lon: number }[] }
 
 /** Lê um GPX (trk/trkseg/trkpt ou rte/rtept) e os pontos de passagem (wpt) */
 export function parseGpx(xml: string): Gpx {
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   if (doc.querySelector("parsererror")) throw new Error("O ficheiro não é um GPX válido.");
   const pt = (el: Element): LatLon => [Number(el.getAttribute("lat")), Number(el.getAttribute("lon"))];
-  let route = [...doc.getElementsByTagName("trkpt")].map(pt);
-  if (route.length < 2) route = [...doc.getElementsByTagName("rtept")].map(pt);
-  route = route.filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+  let els = [...doc.getElementsByTagName("trkpt")];
+  if (els.length < 2) els = [...doc.getElementsByTagName("rtept")];
+  els = els.filter((el) => { const [a, b] = pt(el); return Number.isFinite(a) && Number.isFinite(b); });
+  let route = els.map(pt);
+  // altitude, se todos os pontos a tiverem (serve para estimar o tempo nas subidas)
+  const eles = els.map((el) => Number(el.getElementsByTagName("ele")[0]?.textContent ?? NaN));
+  const ele = eles.length && eles.every(Number.isFinite) ? eles : undefined;
   const waypoints = [...doc.getElementsByTagName("wpt")].map((w) => {
     const [lat, lon] = pt(w);
     return { name: w.getElementsByTagName("name")[0]?.textContent?.trim() || "Ponto", lat, lon };
   });
   if (route.length < 2 && waypoints.length < 2) throw new Error("O GPX não tem nenhum percurso (trk ou rte).");
-  if (route.length < 2) route = waypoints.map((w) => [w.lat, w.lon] as LatLon); // só pontos: liga-os por ordem
+  const onlyWpts = route.length < 2;
+  if (onlyWpts) route = waypoints.map((w) => [w.lat, w.lon] as LatLon); // só pontos: liga-os por ordem
   const name = doc.querySelector("trk > name, rte > name, metadata > name")?.textContent?.trim() || "Percurso";
-  return { name, route, waypoints };
+  return { name, route, ele: onlyWpts ? undefined : ele, waypoints };
 }
 
 /** Texto para o ecrã OLED: sem acentos nem caracteres fora do ASCII */

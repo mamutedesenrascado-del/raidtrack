@@ -4,46 +4,24 @@ import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { connectRadio, type Dest, type Link, type LinkEvents, type LinkStatus } from "./link";
 import { decode, encodePing, encodeSosAck, encodeText, encodeZone } from "./protocol";
-import { adherence, clip, distToRoute, fmtDur, fmtKm, inPolygon, lineLength, oledText, parseGpx, walked, type LatLon } from "./geo";
-import { DEMO_ROUTE, DEMO_WPTS, DEMO_ZONE, startSim } from "./sim";
+import { adherence, clip, dist, distToRoute, fmtDur, fmtKm, inPolygon, oledText, walked, type LatLon } from "./geo";
+import { DEMO_PLAN, startSim } from "./sim";
+import { migrate, passedPost, distToPolygon, planBounds, planOf, postEtas } from "./plan";
+import { initPlanner } from "./planner";
+import type { AlertKind, CovPt, LogEv, Msg, Raid, Team, Zone } from "./types";
 import { demoTerrain } from "./terrain";
 
 /** Versão de demonstração (página única, dados fictícios, sem rádio) */
 const DEMO_BUILD = import.meta.env.MODE === "demo";
 
 // ───────────────────────────── Estado ─────────────────────────────
-type Pt = [number, number, number]; // lat, lon, t(ms)
-interface Sos { seq: number; lat: number | null; lon: number | null; bat: number; since: number; last: number; acked: boolean; ackAt?: number }
-interface Team {
-  num: number; short: string; long: string; color: string;
-  lat?: number; lon?: number; posAt?: number; heard?: number;
-  bat?: number; snr?: number; rssi?: number; hops?: number | null;
-  track: Pt[]; sos?: Sos;
-  /** hora de partida e de chegada (ms), introduzidas pela base */
-  start?: number; end?: number;
-  /** zonas proibidas onde a equipa está agora, e quando foi avisada (id do aviso + hora) */
-  inZones?: Record<string, { id: number; since: number; sentAt: number }>;
-}
-interface Msg {
-  t: number; from: number; to: Dest; text: string; dir: "in" | "out"; st?: "a enviar" | "entregue" | "enviada" | "falhou";
-  /** id do aviso no tracker e quem já carregou OK (nó → hora) */
-  id?: number; reads?: Record<string, number>;
-}
-interface LogEv { t: number; kind: "sos" | "msg" | "info" | "ligacao" | "zona"; text: string }
-interface Zone { id: string; name: string; poly: LatLon[] }
-interface Route { name: string; pts: LatLon[]; wpts: { name: string; lat: number; lon: number }[] }
-interface Raid {
-  started: number; teams: Record<number, Team>; msgs: Msg[]; log: LogEv[]; base?: [number, number];
-  name?: string; route?: Route; zones?: Zone[]; corridor?: number;
-}
-export type { Raid, Team, Zone, Route, LogEv };
-
+export type { Raid, Team, Zone, Route, LogEv } from "./types";
 const COLORS = ["#2563eb", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be185d", "#4d7c0f", "#a16207"];
 const STALE_MS = 3 * 60_000;
 const LOST_MS = 10 * 60_000;
 const KEY = "raidtrack.raid.v1";
 
-let raid: Raid = (DEMO_BUILD ? null : load()) ?? { started: Date.now(), teams: {}, msgs: [], log: [] };
+let raid: Raid = (DEMO_BUILD ? null : load()) ?? migrate({ started: Date.now(), teams: {}, msgs: [], log: [] });
 let link: Link | null = null;
 let linkKind = ""; // conhecido antes de a ligação terminar (o estado "ligado" chega antes de connectRadio devolver)
 let myNum = 0;
@@ -51,7 +29,7 @@ let status: LinkStatus = "desligado";
 let selected: number | null = null;
 
 function load(): Raid | null {
-  try { const s = localStorage.getItem(KEY); return s ? (JSON.parse(s) as Raid) : null; } catch { return null; }
+  try { const s = localStorage.getItem(KEY); return s ? migrate(JSON.parse(s) as Raid) : null; } catch { return null; }
 }
 let saveTimer = 0;
 function save() {
@@ -111,24 +89,15 @@ const map = L.map("map", { layers: [DEMO_BUILD ? demoTerrain() : topo], zoomCont
 if (!DEMO_BUILD) L.control.layers({ Topográfico: topo, OpenStreetMap: osm }, {}, { position: "topright" }).addTo(map);
 L.control.scale({ imperial: false }).addTo(map);
 
-// Percurso teórico, postos e zonas proibidas
-const planLayer = L.layerGroup().addTo(map);
-function drawPlan() {
-  planLayer.clearLayers();
-  for (const z of raid.zones ?? []) {
-    L.polygon(z.poly, { color: "#b91c1c", weight: 2, fillColor: "#ef4444", fillOpacity: 0.18, dashArray: "6 4" })
-      .bindTooltip(`Zona proibida: ${esc(z.name)}`, { sticky: true }).addTo(planLayer);
-  }
-  const r = raid.route;
-  if (r) {
-    L.polyline(r.pts, { color: "#111827", weight: 9, opacity: 0.12 }).addTo(planLayer);
-    L.polyline(r.pts, { color: "#111827", weight: 3, opacity: 0.85, dashArray: "10 6" }).bindTooltip(`Percurso: ${esc(r.name)}`, { sticky: true }).addTo(planLayer);
-    for (const w of r.wpts) {
-      L.marker([w.lat, w.lon], { icon: L.divIcon({ className: "", iconSize: [14, 14], iconAnchor: [7, 7], html: `<div class="wpt"></div>` }), zIndexOffset: 40 })
-        .bindTooltip(esc(w.name)).addTo(planLayer);
-    }
-  }
-}
+const planner = initPlanner({
+  raid: () => raid, teams: () => teams(), map, demo: DEMO_BUILD,
+  save: () => save(), log: (k, t) => log(k, t), toast: (t, k) => toast(t, k), ask: (t, o) => ask(t, o), esc: (x) => esc(x),
+  download: (n, d, t) => download(n, d, t), fileBase: () => fileBase(),
+  changed(what) {
+    if (what === "zones") teams().forEach(checkZones);
+    renderTeams(); fitted = fitted && what !== "route";
+  },
+});
 
 const markers = new Map<number, L.Marker>();
 const tracks = new Map<number, L.Polyline>();
@@ -136,7 +105,7 @@ let baseMarker: L.Marker | null = null;
 let fitted = false;
 
 function icon(t: Team) {
-  const cls = t.sos && !t.sos.acked ? "sos" : t.sos ? "sos acked" : zoneOf(t) ? "zone" : stateOf(t);
+  const cls = t.sos && !t.sos.acked ? "sos" : t.sos ? "sos acked" : zoneOf(t) ? "zone" : Object.keys(t.alerts ?? {}).length ? `alert ${stateOf(t)}` : stateOf(t);
   return L.divIcon({
     className: "", iconSize: [44, 44], iconAnchor: [22, 22],
     html: `<div class="pin ${cls}" style="--c:${t.color}"><span>${esc(t.short)}</span></div>`,
@@ -163,8 +132,8 @@ function drawTeam(t: Team) {
 function fitAll() {
   const pts = teams().filter((t) => t.lat !== undefined).map((t) => [t.lat!, t.lon!] as L.LatLngTuple);
   if (raid.base) pts.push(raid.base);
-  if (raid.route) pts.push(...raid.route.pts);
-  for (const z of raid.zones ?? []) pts.push(...z.poly);
+  const b = planBounds(raid, 50);
+  if (b) pts.push([b[0], b[1]], [b[2], b[3]]);
   if (pts.length) { map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 16 }); fitted = true; }
 }
 function drawBase() {
@@ -226,22 +195,58 @@ function teamStats(t: Team) {
 }
 export type TeamStats = ReturnType<typeof teamStats>;
 
+const ALERT_TXT: Record<AlertKind, (t: Team, since: number) => string> = {
+  parada: (t) => `Parada há ${ago(t.movedAt)}`,
+  silencio: (t) => `Sem contacto há ${ago(t.heard)}`,
+  desvio: (t) => `Fora do percurso há ${ago(t.offSince)}`,
+  bateria: (t) => `Bateria ${t.bat ?? "?"}%`,
+};
+const planTeamOf = (t: Team) => raid.planTeams?.find((p) => p.code && p.code.toUpperCase() === t.short.toUpperCase());
+/** partida real ou, sem ela, a prevista no plano */
+function teamStart(t: Team): number | undefined {
+  if (t.start) return t.start;
+  const p = planTeamOf(t)?.start;
+  return p ? fromTime(p, raid.started - 6 * 3_600_000) : undefined;
+}
+const diffTxt = (ms: number) => { const m = Math.round(ms / 60_000); return Math.abs(m) <= 2 ? "a horas" : m > 0 ? `+${fmtDur(m * 60_000)}` : `−${fmtDur(-m * 60_000)}`; };
+const diffCls = (ms: number) => (ms > 15 * 60_000 ? "bad" : ms < -15 * 60_000 ? "early" : "");
+
 function renderTeams() {
   // Não refazer os cartões enquanto se escreve uma hora (perdia-se o que se está a escrever)
   const ae = document.activeElement as HTMLElement | null;
   if (ae && ae.tagName === "INPUT" && ae.closest("#teams")) return;
-  const list = teams().sort((a, b) => Number(!!b.sos) - Number(!!a.sos) || Number(!!zoneOf(b)) - Number(!!zoneOf(a)) || a.short.localeCompare(b.short));
+  const etas = planner.etas();
+  const nAlerts = (t: Team) => Object.keys(t.alerts ?? {}).length + Object.keys(t.nearDanger ?? {}).length;
+  const list = teams().sort((a, b) => Number(!!b.sos) - Number(!!a.sos) || Number(!!zoneOf(b)) - Number(!!zoneOf(a)) || nAlerts(b) - nAlerts(a) || a.short.localeCompare(b.short));
   $("#teamCount").textContent = String(list.length);
   $("#teams").innerHTML = list.length ? list.map((t) => {
     const zone = zoneOf(t);
-    const st = t.sos ? (t.sos.acked ? "sos acked" : "sos") : zone ? "zone" : stateOf(t);
+    const st = t.sos ? (t.sos.acked ? "sos acked" : "sos") : zone ? "zone" : nAlerts(t) ? "alert" : stateOf(t);
+    const pt = planTeamOf(t);
+    const badges = [
+      ...Object.entries(t.alerts ?? {}).map(([k, since]) => ALERT_TXT[k as AlertKind](t, since!)),
+      ...Object.keys(t.nearDanger ?? {}).map((id) => `Perto de: ${raid.zones?.find((z) => z.id === id)?.name ?? "perigo"}`),
+    ];
+    // postos: passados, último e próximo
+    let postsHtml = "";
+    if (etas.length) {
+      const t0 = teamStart(t);
+      const passed = etas.filter((e) => t.posts?.[e.post.id]);
+      const lastE = passed.sort((a, b) => t.posts![a.post.id] - t.posts![b.post.id]).at(-1);
+      const next = etas.find((e) => !t.posts?.[e.post.id]);
+      const lastTxt = lastE ? `${esc(lastE.post.name)} ${hhmm(t.posts![lastE.post.id])}${t0 !== undefined && Number.isFinite(lastE.min) ? ` <small class="${diffCls(t.posts![lastE.post.id] - (t0 + lastE.min * 60_000))}">${diffTxt(t.posts![lastE.post.id] - (t0 + lastE.min * 60_000))}</small>` : ""}` : "—";
+      const nextTxt = next ? `${esc(next.post.name)}${t0 !== undefined && Number.isFinite(next.min) ? ` <small>prev. ${hhmm(t0 + next.min * 60_000)}</small>` : ""}` : "<small>todos feitos</small>";
+      postsHtml = `<dl class="plan"><div><dt>Postos ${passed.length}/${etas.length} · último</dt><dd>${lastTxt}</dd></div><div><dt>Próximo</dt><dd>${nextTxt}</dd></div></dl>`;
+    }
     const stats = teamStats(t);
     const dev = raid.route && t.lat !== undefined ? distToRoute([t.lat, t.lon!], raid.route.pts) : null;
     const corr = raid.corridor ?? 50;
     const where = t.lat !== undefined ? `${t.lat.toFixed(5)}, ${t.lon!.toFixed(5)}` : "sem posição";
     return `<article class="team ${st} ${selected === t.num ? "sel" : ""}" data-num="${t.num}" style="--c:${t.color}">
       <header><b>${esc(t.short)}</b><span class="lname">${esc(t.long)}</span>
-        <span class="state">${t.sos ? (t.sos.acked ? "SOS confirmado" : "SOS!") : zone ? "Zona proibida" : STATE_TXT[stateOf(t)]}</span></header>
+        <span class="state">${t.sos ? (t.sos.acked ? "SOS confirmado" : "SOS!") : zone ? "Zona proibida" : badges.length ? "Atenção" : STATE_TXT[stateOf(t)]}</span></header>
+      ${pt?.members ? `<div class="members">${esc(pt.members)}</div>` : ""}
+      ${badges.length ? `<div class="badges">${badges.map((b) => `<span>${esc(b)}</span>`).join("")}</div>` : ""}
       ${zone ? `<div class="zoneWarn">Dentro de: <b>${esc(zone)}</b> — aviso enviado ao tracker</div>` : ""}
       <dl>
         <div><dt>Última posição</dt><dd>${ago(t.posAt)}</dd></div>
@@ -253,6 +258,7 @@ function renderTeams() {
         ${raid.route ? `<div><dt>No percurso</dt><dd class="${stats.adh && stats.adh.onRoutePct < 70 ? "low" : ""}">${stats.adh ? Math.round(stats.adh.onRoutePct) + " %" : "—"}${dev !== null ? ` <small class="${dev > corr ? "bad" : ""}">· a ${fmtKm(dev)}</small>` : ""}</dd></div>` : ""}
         <div><dt>Distância${t.start ? "" : " (rasto)"}</dt><dd>${fmtKm(stats.distance)}${stats.duration !== undefined ? ` <small>· ${fmtDur(stats.duration)}</small>` : ""}</dd></div>
       </dl>` : ""}
+      ${postsHtml}
       <div class="times">
         <label>Partida <input type="text" inputmode="numeric" maxlength="5" placeholder="hh:mm" data-time="start" value="${toTime(t.start)}" aria-label="Hora de partida de ${esc(t.short)}" /></label>
         <button data-act="startNow" title="Partiu agora">Agora</button>
@@ -314,7 +320,7 @@ function renderSos() {
   alarm(active.some((t) => !t.sos!.acked));
 }
 
-function renderAll() { renderTeams(); renderMsgs(); renderLog(); renderSos(); renderPlan(); drawPlan(); teams().forEach(drawTeam); drawBase(); }
+function renderAll() { renderTeams(); renderMsgs(); renderLog(); renderSos(); planner.render(); teams().forEach(drawTeam); drawBase(); }
 
 // ───────────────────────────── Alarme sonoro ─────────────────────────────
 let audio: AudioContext | null = null;
@@ -359,18 +365,31 @@ const events: LinkEvents = {
     if (stale) { drawTeam(t); renderTeams(); save(); return; }
     const last = t.track[t.track.length - 1];
     if (!last || last[0] !== lat || last[1] !== lon) t.track.push([lat, lon, when]);
+    const cur: LatLon = [lat, lon];
     checkZones(t);
+    checkPosts(t, last && last[2] >= (t.start ?? raid.started) ? [last[0], last[1]] : undefined, cur, when);
+    // movimento (equipa parada) e afastamento do percurso
+    if (!t.anchor || dist(t.anchor, cur) > 30) { t.anchor = cur; t.movedAt = when; clearAlert(t, "parada"); }
+    if (raid.route) {
+      if (distToRoute(cur, raid.route.pts) > (raid.corridor ?? 50)) t.offSince ??= when;
+      else if (t.offSince) { t.offSince = undefined; clearAlert(t, "desvio", `${t.short} voltou ao percurso`); }
+    }
+    t.posRx = Date.now(); addCov(t);
     drawTeam(t); renderTeams(); save();
   },
   battery(n, pct) {
     if (n === myNum) return;
-    const t = team(n); const prev = t.bat; t.bat = pct;
-    if (pct <= 20 && (prev === undefined || prev > 20)) { log("info", `${t.short}: bateria baixa (${pct}%)`); toast(`${t.short}: bateria baixa (${pct}%)`, "warn"); }
+    const t = team(n); t.bat = pct;
+    const lim = raid.alerts?.bat ?? 20;
+    if (lim > 0 && pct <= lim) raiseAlert(t, "bateria", `${t.short}: bateria baixa (${pct}%)`);
+    else if (pct > lim + 5) clearAlert(t, "bateria");
     renderTeams(); save();
   },
   radio(n, snr, rssi, hops) {
     if (n === myNum) return;
     const t = team(n); t.snr = snr; t.rssi = rssi; t.hops = hops; t.heard = Date.now();
+    if (t.alerts?.silencio) { clearAlert(t, "silencio", `${t.short} voltou a dar sinal`); renderTeams(); }
+    t.radioRx = Date.now(); addCov(t);
   },
   text(from, to, text, when) {
     if (from === myNum) return;
@@ -476,9 +495,9 @@ function showTab(id: string) {
   document.querySelectorAll<HTMLElement>(".pane").forEach((p) => (p.hidden = p.id !== `pane-${id}`));
 }
 
-function download(name: string, text: string, type: string) {
+function download(name: string, data: string | Blob, type: string) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.href = URL.createObjectURL(typeof data === "string" ? new Blob([data], { type }) : data);
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
@@ -529,7 +548,8 @@ function setBase() {
 async function newRaid() {
   if (!(await ask("Começar um novo raid? Exporte primeiro os dados deste raid se os quiser guardar.", "Novo raid"))) return;
   // mantém o planeamento (nome, percurso, zonas): pode ser removido no separador Raid
-  raid = { started: Date.now(), teams: {}, msgs: [], log: [], base: raid.base, name: raid.name, route: raid.route, zones: raid.zones, corridor: raid.corridor };
+  // mantém o plano (percurso, postos, zonas, equipas, mensagens programadas…), que se muda no separador Plano
+  raid = migrate({ started: Date.now(), teams: {}, msgs: [], log: [], base: raid.base, ...planOf(raid) });
   markers.forEach((m) => m.remove()); markers.clear();
   tracks.forEach((p) => p.remove()); tracks.clear();
   fitted = false; save(); renderAll(); log("info", "Novo raid iniciado");
@@ -541,7 +561,22 @@ function checkZones(t: Team) {
   if (t.lat === undefined || !raid.zones?.length) return;
   const p: LatLon = [t.lat, t.lon!];
   t.inZones ??= {};
-  for (const z of raid.zones) {
+  t.nearDanger ??= {};
+  for (const z of raid.zones.filter((x) => x.kind === "perigo")) {
+    const d = inPolygon(p, z.poly) ? 0 : distToPolygon(p, z.poly);
+    const lim = z.warn ?? 50, near = t.nearDanger[z.id];
+    if (d <= lim && !near) {
+      t.nearDanger[z.id] = Date.now();
+      log("zona", `${t.short} ${d === 0 ? "entrou na" : `está a ${Math.round(d)} m da`} zona de perigo "${z.name}"`);
+      toast(`${t.short} perto da zona de perigo "${z.name}"`, "warn");
+      beep(600, 200); setTimeout(() => beep(600, 200), 300);
+      if (z.notifyTracker) void sendMsg(`ATENCAO: ${z.name}${z.notes ? `. ${z.notes}` : ""}`, t.num);
+    } else if (d > lim + 20 && near) {
+      delete t.nearDanger[z.id];
+      log("zona", `${t.short} afastou-se da zona de perigo "${z.name}"`);
+    }
+  }
+  for (const z of raid.zones.filter((x) => x.kind !== "perigo")) {
     const inside = inPolygon(p, z.poly);
     const was = t.inZones[z.id];
     if (inside && !was) {
@@ -564,81 +599,145 @@ async function sendZoneAlert(t: Team, z: Zone) {
   try { await link.sendPrivate(encodeZone(st.id, oledText(`${z.name}. Saiam ja desta zona!`)), t.num); }
   catch { toast(`O aviso de zona para ${t.short} não foi confirmado — volta a tentar`, "warn"); st.sentAt = Date.now() - ZONE_REPEAT_MS + 60_000; }
 }
+// ───────────────────────────── Postos, alertas e mensagens programadas ─────────────────────────────
+function checkPosts(t: Team, prev: LatLon | undefined, cur: LatLon, when: number) {
+  if (when < (t.start ?? raid.started) || (t.end && when > t.end)) return;
+  for (const e of postEtas(raid)) {
+    if (t.posts?.[e.post.id] || !passedPost(prev, cur, e.post)) continue;
+    (t.posts ??= {})[e.post.id] = when;
+    const t0 = teamStart(t);
+    const diff = t0 !== undefined && Number.isFinite(e.min) ? ` (${diffTxt(when - (t0 + e.min * 60_000))} face ao previsto)` : "";
+    log("posto", `${t.short} passou no ${e.post.name} às ${hhmm(when)}${diff}`);
+    toast(`${t.short} passou no ${e.post.name}${diff}`, "ok");
+  }
+}
+function raiseAlert(t: Team, k: AlertKind, text: string) {
+  t.alerts ??= {};
+  if (t.alerts[k]) return;
+  t.alerts[k] = Date.now();
+  log("alerta", text); toast(text, "warn");
+  beep(700, 180); setTimeout(() => beep(700, 180), 260);
+  markers.get(t.num)?.setIcon(icon(t));
+}
+function clearAlert(t: Team, k: AlertKind, text?: string) {
+  if (!t.alerts?.[k]) return;
+  delete t.alerts[k];
+  if (text) log("alerta", text);
+}
+const MIN = 60_000;
+function watchTick() {
+  const now = Date.now(), a = raid.alerts ?? { stillMin: 20, silentMin: 15, offMin: 10, bat: 20 };
+  for (const t of teams()) {
+    const t0 = teamStart(t);
+    const onWay = t0 !== undefined && t0 <= now && !t.end;
+    if (!onWay) { (["parada", "silencio", "desvio"] as AlertKind[]).forEach((k) => clearAlert(t, k)); continue; }
+    if (a.silentMin > 0 && now - (t.heard ?? t0) > a.silentMin * MIN) raiseAlert(t, "silencio", `${t.short}: sem contacto há ${ago(t.heard ?? t0)}`);
+    const atPost = t.lat !== undefined && (raid.posts ?? []).some((p) => dist([t.lat!, t.lon!], [p.lat, p.lon]) <= Math.max(100, (p.radius ?? 40) * 2));
+    const atBase = t.lat !== undefined && raid.base && dist([t.lat, t.lon!], raid.base) < 150;
+    if (a.stillMin > 0 && t.movedAt && now - Math.max(t.movedAt, t0) > a.stillMin * MIN && !atPost && !atBase && !t.alerts?.silencio)
+      raiseAlert(t, "parada", `${t.short}: parada há ${ago(Math.max(t.movedAt, t0))} fora dos postos`);
+    else if (atPost || atBase) clearAlert(t, "parada");
+    if (a.offMin > 0 && raid.route && t.offSince && now - Math.max(t.offSince, t0) > a.offMin * MIN) raiseAlert(t, "desvio", `${t.short}: fora do percurso há ${ago(t.offSince)}`);
+  }
+  // mensagens programadas
+  for (const m of raid.sched ?? []) {
+    if (m.sent) continue;
+    let at = fromTime(m.at)!;
+    if (at < raid.started - 60_000) at += 86_400_000; // raid que passa a meia-noite
+    if (now < at) continue;
+    if (now - at > 30 * MIN) { m.sent = -1; log("msg", `Mensagem programada das ${m.at} não enviada (a hora passou): ${m.text}`); continue; }
+    if (!link) continue; // fica à espera do rádio, até 30 min
+    const dest = m.dest === "all" ? "all" : teams().find((t) => t.short.toUpperCase() === m.dest.toUpperCase())?.num;
+    if (dest === undefined) { m.sent = -1; log("msg", `Mensagem programada das ${m.at}: equipa ${m.dest} não encontrada`); continue; }
+    m.sent = now;
+    void sendMsg(m.text, dest);
+  }
+  save();
+}
+
+// ───────────────────────────── Mapa de cobertura rádio ─────────────────────────────
+const covLayer = L.layerGroup();
+const covColor = (c: CovPt) => (c[4] ? "#6b7280" : c[2] >= 0 ? "#16a34a" : c[2] >= -7 ? "#84cc16" : c[2] >= -12 ? "#f59e0b" : "#dc2626");
+function covDot(c: CovPt) {
+  return L.circleMarker([c[0], c[1]], { radius: 6, color: "#fff", weight: 1, fillColor: covColor(c), fillOpacity: c[4] ? 0.45 : 0.85 })
+    .bindTooltip(`SNR ${c[2].toFixed(1)} dB · RSSI ${c[3]} dBm${c[4] ? ` · via ${c[4]} repetidor${c[4] > 1 ? "es" : ""}` : " · direto"}<br>${hhmm(c[5])}`);
+}
+function addCov(t: Team) {
+  if (!t.posRx || !t.radioRx || Math.abs(t.posRx - t.radioRx) > 4000 || (t.covAt ?? 0) >= Math.max(t.posRx, t.radioRx) || t.lat === undefined || t.snr === undefined) return;
+  t.covAt = Date.now();
+  const c: CovPt = [t.lat, t.lon!, t.snr, t.rssi ?? 0, t.hops ?? null, t.covAt];
+  (raid.cov ??= []).push(c);
+  if (raid.cov.length > 5000) raid.cov.splice(0, raid.cov.length - 5000);
+  if (map.hasLayer(covLayer)) covDot(c).addTo(covLayer);
+}
+function toggleCov() {
+  const on = !map.hasLayer(covLayer);
+  covLayer.clearLayers();
+  if (on) { (raid.cov ?? []).forEach((c) => covDot(c).addTo(covLayer)); covLayer.addTo(map); if (!raid.cov?.length) toast("Ainda sem pontos de cobertura: aparecem à medida que chegam posições pelo rádio"); }
+  else covLayer.remove();
+  $("#btnCov").setAttribute("aria-pressed", String(on));
+  $("#covLegend").hidden = !on;
+}
+
+// ───────────────────────────── Rever o raid ─────────────────────────────
+let replay: { layer: L.LayerGroup; t0: number; t1: number; T: number; timer: number } | null = null;
+function startReplay() {
+  const all = teams().flatMap((t) => t.track.filter((p) => p[2] >= raid.started).map((p) => p[2]));
+  if (!all.length) return toast("Ainda não há percursos para rever", "warn");
+  const t0 = Math.min(...all), t1 = Math.max(...all);
+  markers.forEach((m) => m.remove()); tracks.forEach((p) => p.remove());
+  replay = { layer: L.layerGroup().addTo(map), t0, t1, T: t0, timer: 0 };
+  $("#replay").hidden = false;
+  setReplay(t0);
+}
+function setReplay(T: number) {
+  if (!replay) return;
+  replay.T = Math.min(Math.max(T, replay.t0), replay.t1);
+  replay.layer.clearLayers();
+  for (const t of teams()) {
+    const pts = t.track.filter((p) => p[2] >= raid.started && p[2] <= replay!.T);
+    if (!pts.length) continue;
+    L.polyline(pts.map((p) => [p[0], p[1]] as L.LatLngTuple), { color: t.color, weight: 4, opacity: 0.85 }).addTo(replay.layer);
+    const last = pts[pts.length - 1];
+    L.marker([last[0], last[1]], { icon: L.divIcon({ className: "", iconSize: [36, 36], iconAnchor: [18, 18], html: `<div class="pin small" style="--c:${t.color}"><span>${esc(t.short)}</span></div>` }) }).addTo(replay.layer);
+  }
+  const multi = new Date(replay.t0).toDateString() !== new Date(replay.t1).toDateString();
+  $("#rpTime").textContent = new Date(replay.T).toLocaleString("pt-PT", multi ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+  $<HTMLInputElement>("#rpSlider").value = String(Math.round(((replay.T - replay.t0) / Math.max(1, replay.t1 - replay.t0)) * 1000));
+}
+function playReplay() {
+  if (!replay) return;
+  if (replay.timer) { clearInterval(replay.timer); replay.timer = 0; $("#rpPlay").textContent = "▶"; return; }
+  if (replay.T >= replay.t1) replay.T = replay.t0;
+  $("#rpPlay").textContent = "❚❚";
+  replay.timer = window.setInterval(() => {
+    const speed = Number($<HTMLSelectElement>("#rpSpeed").value);
+    setReplay(replay!.T + speed * 200);
+    if (replay!.T >= replay!.t1) playReplay();
+  }, 200);
+}
+function closeReplay() {
+  if (!replay) return;
+  clearInterval(replay.timer); replay.layer.remove(); replay = null;
+  $("#replay").hidden = true; $("#rpPlay").textContent = "▶";
+  markers.forEach((m) => m.addTo(map)); tracks.forEach((p) => p.addTo(map));
+}
+
 function zoneReminders() {
   for (const t of teams()) for (const [zid, st] of Object.entries(t.inZones ?? {})) {
-    const z = raid.zones?.find((x) => x.id === zid);
+    const z = raid.zones?.find((x) => x.id === zid && x.kind !== "perigo");
     if (!z) { delete t.inZones![zid]; continue; }
     if (Date.now() - st.sentAt > ZONE_REPEAT_MS) void sendZoneAlert(t, z);
   }
 }
 
-// ───────────────────────────── Separador Raid: percurso, zonas, relatório ─────────────────────────────
-let drawing: { name: string; pts: LatLon[]; line: L.Polyline } | null = null;
-function renderPlan() {
-  const ae = document.activeElement as HTMLElement | null;
-  const typing = ae && ae.tagName === "INPUT" && ae.closest("#pane-raid");
-  if (!typing) {
-    $<HTMLInputElement>("#raidName").value = raid.name ?? "";
-    $<HTMLInputElement>("#corridor").value = String(raid.corridor ?? 50);
-  }
-  const r = raid.route;
-  $("#routeInfo").innerHTML = r
-    ? `<b>${esc(r.name)}</b> · ${fmtKm(lineLength(r.pts))}${r.wpts.length ? ` · ${r.wpts.length} posto${r.wpts.length > 1 ? "s" : ""}` : ""}`
-    : "Sem percurso teórico. Importe um ficheiro GPX.";
-  ($("#routeClear") as HTMLButtonElement).hidden = !r;
-  const zs = raid.zones ?? [];
-  $("#zoneList").innerHTML = zs.length
-    ? zs.map((z) => `<li data-zid="${z.id}"><span>${esc(z.name)}</span><button data-act="zview">Ver</button><button data-act="zdel">Apagar</button></li>`).join("")
-    : `<li class="empty">Sem zonas proibidas.</li>`;
-  $("#zoneDraw").hidden = !!drawing;
-  $("#zoneDrawing").hidden = !drawing;
-  if (drawing) $("#zoneDrawHint").textContent = `A desenhar "${drawing.name}": ${drawing.pts.length} ponto${drawing.pts.length === 1 ? "" : "s"}. Clique no mapa para marcar os cantos.`;
-}
-function startZone() {
-  const name = $<HTMLInputElement>("#zoneName").value.trim() || `Zona ${(raid.zones?.length ?? 0) + 1}`;
-  drawing = { name, pts: [], line: L.polyline([], { color: "#b91c1c", weight: 2, dashArray: "4 4" }).addTo(map) };
-  document.body.classList.add("drawing");
-  renderPlan();
-  toast("Clique no mapa para marcar os cantos da zona; no fim carregue em Concluir.");
-}
-function finishZone(keep = true) {
-  if (!drawing) return;
-  if (keep && drawing.pts.length < 3) { toast("Uma zona precisa de pelo menos 3 pontos", "warn"); return; }
-  drawing.line.remove();
-  if (keep) {
-    raid.zones ??= [];
-    raid.zones.push({ id: `z${Date.now().toString(36)}`, name: drawing.name, poly: drawing.pts });
-    log("info", `Zona proibida criada: ${drawing.name}`);
-    $<HTMLInputElement>("#zoneName").value = "";
-  }
-  drawing = null;
-  document.body.classList.remove("drawing");
-  if (keep) teams().forEach(checkZones);
-  drawPlan(); renderPlan(); renderTeams(); save();
-}
-map.on("click", (e) => {
-  if (!drawing) return;
-  drawing.pts.push([e.latlng.lat, e.latlng.lng]);
-  drawing.line.setLatLngs([...drawing.pts, drawing.pts[0]]);
-  renderPlan();
-});
-async function importRoute(f: File) {
-  try {
-    const g = parseGpx(await f.text());
-    raid.route = { name: g.name, pts: g.route, wpts: g.waypoints };
-    if (!raid.name) raid.name = g.name;
-    log("info", `Percurso importado: ${g.name} (${fmtKm(lineLength(g.route))})`);
-    drawPlan(); renderPlan(); renderTeams(); save();
-    map.fitBounds(L.latLngBounds(g.route).pad(0.2));
-    toast(`Percurso "${g.name}" importado`, "ok");
-  } catch (e) { toast((e as Error).message, "warn"); }
-}
-
+// ───────────────────────────── Ficheiros do fim do raid ─────────────────────────────
 function gpxText(): string {
   const parts = [`<?xml version="1.0" encoding="UTF-8"?>`,
     `<gpx version="1.1" creator="RaidTrack" xmlns="http://www.topografix.com/GPX/1/1">`,
     `<metadata><name>${esc(raid.name || "Raid")}</name><time>${new Date(raid.started).toISOString()}</time></metadata>`];
-  for (const w of raid.route?.wpts ?? []) parts.push(`<wpt lat="${w.lat}" lon="${w.lon}"><name>${esc(w.name)}</name></wpt>`);
+  for (const w of raid.posts ?? []) parts.push(`<wpt lat="${w.lat}" lon="${w.lon}"><name>${esc(w.name)}</name>${w.notes ? `<desc>${esc(w.notes)}</desc>` : ""}</wpt>`);
+  for (const r of raid.recon ?? []) parts.push(`<trk><name>Reconhecimento: ${esc(r.name)}</name><trkseg>`, ...r.pts.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}"/>`), `</trkseg></trk>`);
   if (raid.route) parts.push(`<trk><name>Percurso teórico: ${esc(raid.route.name)}</name><trkseg>`, ...raid.route.pts.map((p) => `<trkpt lat="${p[0]}" lon="${p[1]}"/>`), `</trkseg></trk>`);
   for (const t of teams()) {
     parts.push(`<trk><name>${esc(t.short)} ${esc(t.long)}</name><trkseg>`);
@@ -659,7 +758,7 @@ async function makeReport() {
   btn.disabled = true; btn.textContent = "A gerar…";
   try {
     const { buildReport } = await import("./report");
-    const rep = await buildReport(raid, teams(), teamStats, (m) => (btn.textContent = m), DEMO_BUILD);
+    const rep = await buildReport(raid, teams(), teamStats, (m) => (btn.textContent = m), DEMO_BUILD, teamStart);
     if (DEMO_BUILD) {
       // a página de demonstração não descarrega nem mostra PDF: pré-visualização do conteúdo
       $("#pdfBody").innerHTML = `<p class="muted">Na app real, isto é descarregado como PDF (${rep.pages} páginas). Mapas sem fundo nesta demonstração: com Internet levam o mapa OpenStreetMap.</p>
@@ -748,34 +847,12 @@ document.querySelectorAll<HTMLButtonElement>(".quick button").forEach((b) => (b.
   void sendMsg(b.textContent!, v === "all" ? "all" : Number(v));
 }));
 
-$<HTMLInputElement>("#raidName").onchange = (e) => { raid.name = (e.target as HTMLInputElement).value.trim(); save(); };
-$<HTMLInputElement>("#corridor").onchange = (e) => {
-  const v = Math.round(Number((e.target as HTMLInputElement).value));
-  raid.corridor = Number.isFinite(v) && v >= 5 && v <= 1000 ? v : 50;
-  (e.target as HTMLInputElement).value = String(raid.corridor);
-  renderTeams(); save();
-};
-$<HTMLInputElement>("#routeFile").onchange = (e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) void importRoute(f); (e.target as HTMLInputElement).value = ""; };
-$("#routeClear").onclick = () => void ask("Remover o percurso teórico deste raid?", "Remover").then((ok) => { if (!ok) return; raid.route = undefined; drawPlan(); renderPlan(); renderTeams(); save(); });
-$("#zoneDrawBtn").onclick = startZone;
-$("#zoneDone").onclick = () => finishZone(true);
-$("#zoneCancel").onclick = () => finishZone(false);
-$("#zoneUndo").onclick = () => { if (drawing?.pts.length) { drawing.pts.pop(); drawing.line.setLatLngs(drawing.pts.length ? [...drawing.pts, drawing.pts[0]] : []); renderPlan(); } };
-$("#zoneList").addEventListener("click", (e) => {
-  const li = (e.target as HTMLElement).closest<HTMLElement>("li[data-zid]");
-  const act = (e.target as HTMLElement).closest<HTMLElement>("button")?.dataset.act;
-  const z = raid.zones?.find((x) => x.id === li?.dataset.zid);
-  if (!z || !act) return;
-  if (act === "zview") map.fitBounds(L.latLngBounds(z.poly).pad(0.5));
-  if (act === "zdel") void ask(`Apagar a zona proibida "${z.name}"?`, "Apagar").then((ok) => {
-    if (!ok) return;
-    raid.zones = raid.zones!.filter((x) => x !== z);
-    teams().forEach((t) => { if (t.inZones) delete t.inZones[z.id]; });
-    log("info", `Zona proibida apagada: ${z.name}`);
-    drawPlan(); renderPlan(); renderTeams(); save();
-  });
-});
 $("#btnGpx").onclick = saveGpx;
+$("#btnCov").onclick = toggleCov;
+$("#btnReplay").onclick = startReplay;
+$("#rpPlay").onclick = playReplay;
+$("#rpClose").onclick = closeReplay;
+$<HTMLInputElement>("#rpSlider").oninput = (e) => { if (!replay) return; setReplay(replay.t0 + (Number((e.target as HTMLInputElement).value) / 1000) * (replay.t1 - replay.t0)); };
 $("#btnReport").onclick = () => void makeReport();
 $("#pdfClose").onclick = () => { $("#pdfView").hidden = true; $("#pdfBody").innerHTML = ""; };
 
@@ -786,6 +863,7 @@ setInterval(() => {
   renderTeams();
   teams().forEach((t) => markers.get(t.num)?.setIcon(icon(t)));
   zoneReminders();
+  watchTick();
 }, 10_000);
 
 // Funcionalidades disponíveis neste browser
@@ -802,9 +880,8 @@ if (DEMO_BUILD) {
   $("#lnkSetup").hidden = true; // a preparação de rádios não funciona dentro da demonstração
   raid.base = [39.6965, -8.2924]; // base fictícia no centro da zona
   raid.started = Date.now() - 20 * 60_000; // o simulador traz rasto dos últimos minutos
-  raid.name = "Raid de demonstração";
-  raid.route = { name: "Percurso dos 3 postos", pts: DEMO_ROUTE, wpts: DEMO_WPTS };
-  raid.zones = [{ id: "zdemo", name: "Estrada nacional", poly: DEMO_ZONE }];
+  Object.assign(raid, DEMO_PLAN(raid.started));
+  migrate(raid);
   void connect("demo").then(() => setTimeout(() => {
     // equipas a andar partiram no início do rasto
     teams().forEach((t) => { if (t.track.length && Date.now() - (t.heard ?? 0) < 120_000) t.start = t.track[0][2]; });

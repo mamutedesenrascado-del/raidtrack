@@ -89,8 +89,19 @@ O Safari não suporta Bluetooth Web. Duas vias:
 - **Horas de partida e chegada** em cada cartão (escrever `hh:mm` ou **Agora**): a distância, o tempo e a % no percurso contam só entre essas horas.
 - **Exportar:** percursos em GPX (abre no Google Earth/QGIS) e registo do raid em CSV.
 
-### Separador Raid — percurso, zonas proibidas e relatório
-- **Importar GPX** do percurso teórico (trk, rte ou só pontos): aparece tracejado no mapa, com os postos. Cada equipa mostra a **% no percurso** (distância feita a menos de *corredor* metros do percurso, 50 m por omissão) e a distância atual ao percurso.
-- **Zonas proibidas:** dar um nome, **Desenhar no mapa** (clicar nos cantos) e **Concluir**. Quando uma equipa entra numa zona: alarme e aviso na base, e o tracker apita e mostra "ZONA PROIBIDA" até carregarem OK (repete de 5 em 5 min enquanto lá estiverem).
-- **Relatório PDF:** resumo de todas as equipas (partida, chegada, duração, distância, % no percurso, cobertura, entradas em zonas, SOS) com mapa geral, e uma página por equipa com o mapa do seu percurso e os eventos. O mapa de fundo precisa de Internet; sem Internet sai com quadrícula e escala.
-- **GPX de todas as equipas:** um ficheiro com o percurso teórico, os postos e o rasto de cada equipa.
+### Separador Plano — preparar o raid (também sem rádio ligado)
+- **Plano do raid:** nome e data. **Guardar plano** descarrega um ficheiro `.raidtrack` com tudo o que está abaixo e, se marcado, o **mapa da zona** (até 500 mosaicos topográficos). **Abrir plano** carrega-o noutro dia ou noutro computador — no dia do raid funciona **sem Internet**, com o mapa incluído. Abrir um plano mantém as equipas e posições do raid em curso. A chave do rádio não vai no ficheiro.
+- **Percurso teórico** (GPX trk, rte ou só pontos; os `wpt` passam a postos). Corredor (50 m) e velocidade média (3,5 km/h): o tempo previsto soma 1 h por cada 500 m de subida se o GPX tiver altitude.
+- **Reconhecimento:** um ou mais GPX feitos no terreno, a azul no mapa, com a % que coincide com o percurso.
+- **Postos:** do GPX ou **Adicionar posto no mapa**; nome, raio (40 m) e notas. A passagem fica **registada automaticamente** quando a equipa chega a menos do raio (também entre duas posições, porque o GPS só envia de minuto a minuto), com a diferença para a hora prevista.
+- **Zonas proibidas** (o tracker apita até OK) e **zonas de perigo** (a base é avisada quando a equipa está a menos de X m; opcionalmente também o tracker, com uma mensagem que fica no ecrã até OK).
+- **Equipas previstas:** código (igual ao do tracker), nome, elementos e partida prevista (usada nas horas previstas enquanto não houver partida real).
+- **Segurança e notas:** ponto de encontro, hospital, contactos de emergência, notas.
+- **Mensagens programadas:** hora, destino e texto; enviadas sozinhas com o rádio ligado (até 30 min de atraso).
+- **Alertas** (0 desliga): equipa **parada** há X min fora dos postos e da base, **sem contacto** há X min, **fora do percurso** há X min, **bateria** abaixo de X %. Só para equipas que já partiram (hora real ou prevista) e ainda não chegaram.
+
+### Durante e depois do raid
+- **Relatório PDF:** resumo (partida, chegada, duração, distância, % no percurso, cobertura, postos, zonas, SOS), mapa geral, e uma página por equipa com mapa, **tabela de postos (previsto / passagem / diferença)**, elementos e eventos. Mapa de fundo OpenStreetMap; sem Internet usa o mapa guardado do plano ou sai com quadrícula.
+- **GPX de todas as equipas:** percurso teórico, postos, reconhecimentos e o rasto de cada equipa.
+- **Rever o raid:** barra de tempo para ver onde estava cada equipa a cada momento (×30, ×120, ×600).
+- **Cobertura rádio:** cada posição recebida fica marcada no mapa com a qualidade do sinal (verde bom → vermelho no limite; cinzento = chegou por repetidor). Serve para decidir onde pôr um repetidor.

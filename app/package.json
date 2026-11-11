@@ -9,7 +9,7 @@
     "cap:android": "npm run build && (npx cap add android || echo ja-existe) && npx cap sync android && npx cap open android",
     "cap:ios": "npm run build && (npx cap add ios || echo ja-existe) && npx cap sync ios && npx cap open ios",
     "build:demo": "tsc && vite build --mode demo",
-    "test": "tsx test/settings.test.ts && tsx test/telemetria.test.ts && tsx test/geo.test.ts"
+    "test": "tsx test/settings.test.ts && tsx test/telemetria.test.ts && tsx test/geo.test.ts && tsx test/plan.test.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.17.0",
