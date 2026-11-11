@@ -108,7 +108,7 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
     int8_t kScroll = 0;       // página (mensagens longas, histórico)
     int8_t kPick = -1;        // mensagem rápida escolhida (para confirmar)
     int8_t kNoticePages = 1;  // páginas do aviso atual (calculado ao desenhar)
-    uint8_t kOrient = 0;      // 0/1 = vertical (dois sentidos), 2/3 = horizontal (normal / invertida)
+    uint8_t kOrient = 1;      // 0/1 = vertical (dois sentidos; 1 = antena para cima), 2/3 = horizontal (normal / invertida)
     uint32_t kLastInput = 0;
     char kToast[48] = "";
     uint32_t kToastUntil = 0;

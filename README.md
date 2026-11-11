@@ -40,7 +40,7 @@ SOS: **premir 2 s** dispara (3 bips, ecrã "SOS ENVIADO"); repete a cada 30 s at
 **Caixa impressa em 3D (T-Beam Supreme, na vertical, com teclado e SOS):** ver [enclosure/](enclosure/README.md).
 
 ### Ecrã do tracker (modo quiosque)
-O tracker de equipa já não mostra os painéis do Meshtastic (nós, GPS, LoRa, sistema…) nem os menus: o RaidTrack desenha o ecrã inteiro e recebe todos os botões. Vem **na vertical**; no menu, **Rodar ecrã** passa pelas 4 posições (vertical para um lado, para o outro, horizontal, horizontal invertida) e fica guardado no rádio.
+O tracker de equipa já não mostra os painéis do Meshtastic (nós, GPS, LoRa, sistema…) nem os menus: o RaidTrack desenha o ecrã inteiro e recebe todos os botões. Vem **na vertical, com a antena para cima**; no menu, **Rodar ecrã** passa pelas 4 posições (vertical para um lado, para o outro, horizontal, horizontal invertida) e fica guardado no rádio.
 
 | Ecrã | O que mostra |
 |---|---|
