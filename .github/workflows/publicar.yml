@@ -35,6 +35,8 @@ jobs:
           mkdir -p mt/src/modules/optional mt/variants/raidtrack
           cp -r firmware/RaidTrack mt/src/modules/optional/
           cp firmware/raidtrack.ini mt/variants/raidtrack/
+          # alterações ao núcleo do Meshtastic (modo quiosque do tracker de equipa)
+          for p in firmware/patches/*.patch; do git -C mt apply "../$p"; done
 
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }

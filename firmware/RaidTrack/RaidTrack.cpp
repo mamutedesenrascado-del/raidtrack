@@ -42,6 +42,10 @@ using namespace raidtrack;
 
 RaidTrackModule *raidTrackModule;
 
+// Ligação ao núcleo (modo quiosque): o Screen e o InputBroker chamam estes ponteiros se não forem nulos
+bool (*raidtrackKioskDraw)(OLEDDisplay *display) = nullptr;
+bool (*raidtrackKioskInput)(const struct _InputEvent *event) = nullptr;
+
 void setupRaidTrack()
 {
     raidTrackModule = new RaidTrackModule();
@@ -82,6 +86,9 @@ RaidTrackModule::RaidTrackModule()
     pinMode(RAIDTRACK_BUZZER_PIN, OUTPUT);
     digitalWrite(RAIDTRACK_BUZZER_PIN, LOW);
 #endif
+#ifdef RAIDTRACK_KIOSK
+    kioskInit();
+#endif
     LOG_INFO("RaidTrack: módulo ativo (%s)",
 #ifdef RAIDTRACK_ROLE_TEAM
              "equipa"
@@ -115,6 +122,9 @@ int32_t RaidTrackModule::runOnce()
 
 #ifdef RAIDTRACK_ROLE_TEAM
     noticeTick(now);
+#endif
+#ifdef RAIDTRACK_KIOSK
+    kioskTick(now);
 #endif
     buzzerTick(now);
     return 50; // ms — suficiente para ler o botão com debounce
@@ -355,6 +365,13 @@ void RaidTrackModule::queueNotice(uint16_t id, bool zone, NodeNum from, const ch
 
 void RaidTrackModule::showNotice()
 {
+#ifdef RAIDTRACK_KIOSK
+    // O quiosque desenha o aviso por cima de tudo (ver RaidTrackKiosk.cpp)
+    kScroll = 0;
+    powerFSM.trigger(EVENT_RECEIVED_MSG);
+    kioskRedraw();
+    return;
+#endif
 #if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD)
     if (!noticeCount || !screen)
         return;
@@ -424,6 +441,18 @@ void RaidTrackModule::noticeConfirmed()
         return;
     }
 
+    noticeDone();
+}
+
+/** A equipa leu o aviso todo: confirma à base e passa ao seguinte */
+void RaidTrackModule::noticeDone()
+{
+    if (!noticeCount)
+        return;
+    const Notice &nt = notices[0];
+#ifdef RAIDTRACK_KIOSK
+    kioskRemember(nt);
+#endif
     // Confirmação de leitura para a base
     uint8_t b[5] = {MAGIC, VERSION, MSG_READ, 0, 0};
     putU16(b + 3, nt.id);
@@ -458,7 +487,7 @@ void RaidTrackModule::noticeTick(uint32_t now)
             noticeNextBeep = now + RAIDTRACK_NOTICE_BEEP_MS;
         }
     }
-#if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD)
+#if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD) && !defined(RAIDTRACK_KIOSK)
     // Outro aviso (ex.: SOS, mensagem normal) tapou o nosso? Volta a mostrá-lo quando sair.
     if ((int32_t)(now - noticeNextCheck) >= 0) {
         noticeNextCheck = now + 2000;
@@ -485,6 +514,11 @@ void RaidTrackModule::shortName(NodeNum n, char *out, size_t outLen)
 
 void RaidTrackModule::banner(const char *msg, uint32_t ms)
 {
+#ifdef RAIDTRACK_KIOSK
+    powerFSM.trigger(EVENT_RECEIVED_MSG);
+    kioskToast(msg, ms ? ms : 8000);
+    return;
+#endif
 #if HAS_SCREEN && !defined(MESHTASTIC_INCLUDE_INKHUD)
     powerFSM.trigger(EVENT_RECEIVED_MSG); // garante ecrã ligado
     if (screen)

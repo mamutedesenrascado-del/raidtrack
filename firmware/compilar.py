@@ -63,6 +63,12 @@ def main():
     dst = MT / "src" / "modules" / "optional" / "RaidTrack"
     shutil.rmtree(dst, ignore_errors=True)
     shutil.copytree(AQUI / "RaidTrack", dst)
+    # Pequenas alterações ao núcleo (modo quiosque): aplicadas uma vez, com git apply (Windows e Mac)
+    for patch in sorted((AQUI / "patches").glob("*.patch")):
+        if subprocess.run(["git", "apply", "--check", str(patch)], cwd=MT, capture_output=True).returncode == 0:
+            run(["git", "apply", str(patch)], cwd=MT)
+        elif subprocess.run(["git", "apply", "--reverse", "--check", str(patch)], cwd=MT, capture_output=True).returncode != 0:
+            sys.exit(f"Não foi possível aplicar {patch.name}: apague a pasta {MT} e volte a correr.")
     (MT / "variants" / "raidtrack").mkdir(exist_ok=True)
     shutil.copy(AQUI / "raidtrack.ini", MT / "variants" / "raidtrack" / "raidtrack.ini")
 

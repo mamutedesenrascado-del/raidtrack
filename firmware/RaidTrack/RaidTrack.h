@@ -14,6 +14,7 @@
 #include "SinglePortModule.h"
 #include "concurrency/OSThread.h"
 #include "configuration.h"
+#include "RaidTrackKiosk.h"
 
 namespace raidtrack
 {
@@ -40,6 +41,12 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
 {
   public:
     RaidTrackModule();
+
+#ifdef RAIDTRACK_KIOSK
+    // --- modo quiosque (RaidTrackKiosk.cpp) ---
+    bool kioskDraw(OLEDDisplay *display);
+    bool kioskInput(const struct _InputEvent *event);
+#endif
 
   protected:
     ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
@@ -77,6 +84,7 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
     void noticeTick(uint32_t now);
     static void onNoticeButton(int selected);
     void noticeConfirmed();
+    void noticeDone();
 
     // Estado SOS (equipa)
     bool sosActive = false;
@@ -91,6 +99,42 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
 
     // Resposta a PING com atraso aleatório (evita colisões quando a base pede a todos)
     uint32_t pingReplyAt = 0;
+
+#ifdef RAIDTRACK_KIOSK
+    // --- modo quiosque ---
+    enum KScreen : uint8_t { K_HOME, K_MENU, K_SEND, K_CONFIRM, K_HISTORY };
+    KScreen kScreen = K_HOME;
+    int8_t kSel = 0;          // linha escolhida na lista atual
+    int8_t kScroll = 0;       // página (mensagens longas, histórico)
+    int8_t kPick = -1;        // mensagem rápida escolhida (para confirmar)
+    int8_t kNoticePages = 1;  // páginas do aviso atual (calculado ao desenhar)
+    uint8_t kOrient = 0;      // 0/1 = vertical (dois sentidos), 2/3 = horizontal (normal / invertida)
+    uint32_t kLastInput = 0;
+    char kToast[48] = "";
+    uint32_t kToastUntil = 0;
+    OLEDDisplay *kCanvas = nullptr;
+    struct Hist {
+        uint32_t at;
+        bool zone;
+        char text[164];
+    };
+    static constexpr uint8_t HIST_MAX = 6;
+    Hist hist[HIST_MAX];
+    uint8_t histCount = 0;
+    void kioskInit();
+    void kioskToast(const char *msg, uint32_t ms);
+    void kioskRedraw();
+    void kioskRemember(const Notice &nt);
+    void kioskLoadPrefs();
+    void kioskSavePrefs();
+    void kioskSendText(const char *text);
+    int kioskCannedCount();
+    const char *kioskCanned(int i);
+    void kioskRender(OLEDDisplay *c);
+    void kioskBlit(OLEDDisplay *c, OLEDDisplay *d);
+    void kioskUpdateHome(OLEDDisplay *c);
+    void kioskTick(uint32_t now);
+#endif
 
     // Besouro não bloqueante
     uint8_t buzzSteps = 0; // nº de transições restantes

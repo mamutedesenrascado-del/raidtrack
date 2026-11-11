@@ -1,0 +1,58 @@
+diff -ruN a/src/graphics/Screen.cpp b/src/graphics/Screen.cpp
+--- a/src/graphics/Screen.cpp
++++ b/src/graphics/Screen.cpp
+@@ -21,6 +21,9 @@
+ 
+ */
+ #include "Screen.h"
++#ifdef RAIDTRACK_KIOSK
++#include "modules/optional/RaidTrack/RaidTrackKiosk.h"
++#endif
+ #include "NodeDB.h"
+ #include "PowerMon.h"
+ #include "Throttle.h"
+@@ -184,6 +187,18 @@
+ 
+ static inline void updateUiFrame(OLEDDisplayUi *ui)
+ {
++#ifdef RAIDTRACK_KIOSK
++    // RaidTrack: o módulo desenha o ecrã inteiro (modo quiosque do tracker de equipa)
++    if (raidtrackKioskDraw && screen != nullptr) {
++        OLEDDisplay *display = screen->getDisplayDevice();
++        if (raidtrackKioskDraw(display)) {
++            if (NotificationRenderer::current_notification_type == notificationTypeEnum::pairing_pin)
++                NotificationRenderer::drawBannercallback(display, ui->getUiState());
++            display->display();
++            return;
++        }
++    }
++#endif
+ #ifdef MESHTASTIC_LOCKDOWN
+     if (meshtastic_security::shouldRedactDisplay() && screen != nullptr) {
+         OLEDDisplay *display = screen->getDisplayDevice();
+diff -ruN a/src/input/InputBroker.cpp b/src/input/InputBroker.cpp
+--- a/src/input/InputBroker.cpp
++++ b/src/input/InputBroker.cpp
+@@ -4,6 +4,9 @@
+ #include "graphics/Screen.h"
+ #include "input/HapticFeedback.h"
+ #include "modules/ExternalNotificationModule.h"
++#ifdef RAIDTRACK_KIOSK
++#include "modules/optional/RaidTrack/RaidTrackKiosk.h"
++#endif
+ #ifdef MESHTASTIC_LOCKDOWN
+ #include "security/LockdownDisplay.h"
+ #endif
+@@ -141,6 +144,12 @@
+     }
+ #endif
+ 
++#ifdef RAIDTRACK_KIOSK
++    // RaidTrack: no modo quiosque os botões vão só para o módulo (sem menus do Meshtastic)
++    if (event && raidtrackKioskInput && raidtrackKioskInput(event))
++        return 0;
++#endif
++
+ #ifdef MESHTASTIC_LOCKDOWN
+     // Lockdown: when the display is redacted (storage locked, or screen-lock
+     // latch set after idle) the screen content is hidden, but local input

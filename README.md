@@ -37,6 +37,21 @@ Botões entre o GPIO e GND (o firmware ativa o pull-up interno). O instalador de
 
 SOS: **premir 2 s** dispara (3 bips, ecrã "SOS ENVIADO"); repete a cada 30 s até a base confirmar (bip longo, "BASE RECEBEU O SOS"). **Premir 5 s** com SOS ativo cancela.
 
+### Ecrã do tracker (modo quiosque)
+O tracker de equipa já não mostra os painéis do Meshtastic (nós, GPS, LoRa, sistema…) nem os menus: o RaidTrack desenha o ecrã inteiro e recebe todos os botões. Vem **na vertical**; no menu, **Rodar ecrã** passa pelas 4 posições (vertical para um lado, para o outro, horizontal, horizontal invertida) e fica guardado no rádio.
+
+| Ecrã | O que mostra |
+|---|---|
+| Início | código da equipa, bateria, GPS, há quanto tempo ouviu a rede, como fazer SOS |
+| Menu | Enviar mensagem · Mensagens lidas · Rodar ecrã · Voltar |
+| Enviar | as mensagens rápidas ("Chegámos ao posto"…), com confirmação |
+| Aviso da base / zona proibida | por cima de tudo, com páginas, até carregar **OK** (a base vê "lida") |
+| SOS | ecrã cheio até a base confirmar |
+
+Botões: **cima** = anterior, **baixo** = seguinte, **OK** = escolher. Só com o botão do próprio T-Beam: **carregar** = seguinte, **manter meio segundo** = OK. Os menus do Meshtastic, desligar pelo botão e reposição de fábrica ficam bloqueados.
+
+![Ecrãs do tracker na vertical e na horizontal](docs/ecras-tracker.png)
+
 ## 2. Pôr tudo a funcionar (sem terminal)
 
 **Uma vez só — publicar no GitHub:**
