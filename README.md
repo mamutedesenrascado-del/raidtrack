@@ -89,12 +89,19 @@ Chrome no Android abre a mesma página e liga por **Bluetooth** (Web Bluetooth).
 
 ### iPhone / iPad
 O Safari não suporta Bluetooth Web. Duas vias:
-- **Já:** browser gratuito *Bluefy* (App Store), que suporta Web Bluetooth, a abrir o endereço da app.
+- **Já:** browser gratuito *Bluefy* (App Store), que suporta Web Bluetooth, a abrir o endereço da app (precisa de Internet para abrir a app).
 - **App nativa:** `npm run cap:ios` num Mac com Xcode. Acrescentar ao `ios/App/App/Info.plist`:
   `NSBluetoothAlwaysUsageDescription` = "Ligação ao rádio RaidTrack da base".
 
+### Usar sem Internet (portátil)
+A app guarda-se toda no computador na primeira vez que é aberta com Internet (incluindo o relatório PDF e o instalador dos rádios). No dia do raid abre sem Internet e liga ao rádio da base por USB ou Bluetooth.
+1. Em casa, com Internet: abrir a app no **Chrome ou Edge** e, de preferência, **Instalar app** (ícone na barra de endereço) — fica como um programa no ambiente de trabalho.
+2. Abrir ou fazer o plano; em **Plano → Usar sem Internet** carregar **Guardar mapa da zona do plano** (1,5 km à volta do percurso, postos e zonas).
+3. A lista "Usar sem Internet" mostra se está tudo pronto (app, mapa, plano, ligação ao rádio).
+4. No campo: abrir o RaidTrack (ou o endereço) sem Internet e ligar o rádio.
+
 ### Antes do raid
-1. **Mapa offline:** com Internet, enquadrar a zona do raid e carregar **Mapa offline** (guarda os mosaicos OpenTopoMap da zona, até 4000 mosaicos).
+1. **Mapa offline:** com Internet, enquadrar a zona do raid e carregar **Mapa offline** (guarda os mosaicos OpenTopoMap da zona, até 4000 mosaicos), ou usar **Guardar mapa da zona do plano**.
 2. **Base aqui:** marca a posição da base → distância e rumo de cada equipa.
 3. **Demonstração:** 5 equipas simuladas, SOS da EQ2 aos 25 s — serve para treinar os operadores.
 

@@ -70,6 +70,13 @@
           <p class="muted small">O plano fica guardado neste computador enquanto edita. "Guardar plano" descarrega um ficheiro .raidtrack para continuar noutro dia, passar a outro chefe ou abrir no dia do raid, mesmo sem Internet. A chave do rádio não vai no ficheiro.</p>
         </section>
 
+        <details class="plan-sec" id="offSec">
+          <summary>Usar sem Internet <span id="offBadge" class="count"></span></summary>
+          <ul id="offList" class="checks"></ul>
+          <div class="row"><button id="offMap" class="ghost">Guardar mapa da zona do plano</button><button id="offCheck" class="ghost">Verificar</button></div>
+          <p class="muted small">Prepare em casa, com Internet: abra a app (fica guardada), abra ou faça o plano e guarde o mapa da zona. No dia, a app abre neste computador sem Internet e liga ao rádio da base por USB ou Bluetooth. No Chrome ou Edge, "Instalar app" (ícone na barra de endereço) põe o RaidTrack no ambiente de trabalho como um programa.</p>
+        </details>
+
         <details class="plan-sec" open>
           <summary>Percurso teórico</summary>
           <p id="routeInfo" class="muted"></p>

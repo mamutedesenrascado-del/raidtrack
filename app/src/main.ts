@@ -6,7 +6,7 @@ import { connectRadio, type Dest, type Link, type LinkEvents, type LinkStatus } 
 import { decode, encodePing, encodeSosAck, encodeText, encodeZone } from "./protocol";
 import { adherence, clip, dist, distToRoute, fmtDur, fmtKm, inPolygon, oledText, walked, type LatLon } from "./geo";
 import { DEMO_PLAN, startSim } from "./sim";
-import { migrate, passedPost, distToPolygon, planBounds, planOf, postEtas } from "./plan";
+import { migrate, passedPost, distToPolygon, planBounds, planOf, postEtas, tilesFor, TOPO } from "./plan";
 import { initPlanner } from "./planner";
 import type { AlertKind, CovPt, LogEv, Msg, Raid, Team, Zone } from "./types";
 import { demoTerrain } from "./terrain";
@@ -511,19 +511,30 @@ function exportRaid() {
 // Descarregar mosaicos do mapa para usar sem Internet (guardados pelo service worker)
 function lon2x(lon: number, z: number) { return Math.floor(((lon + 180) / 360) * 2 ** z); }
 function lat2y(lat: number, z: number) { const r = (lat * Math.PI) / 180; return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z); }
-async function cacheArea() {
+async function cacheArea(plano = false) {
   if (DEMO_BUILD) return toast("Na app real, guarda o mapa topográfico desta zona para usar sem Internet.");
   if (!navigator.serviceWorker?.controller) return toast("Recarregue a página uma vez (com Internet) para ativar o modo offline", "warn");
-  const b = map.getBounds(), z0 = Math.max(10, map.getZoom() - 1), z1 = Math.min(16, map.getZoom() + 3);
-  const urls: string[] = [];
-  for (let z = z0; z <= z1; z++)
-    for (let x = lon2x(b.getWest(), z); x <= lon2x(b.getEast(), z); x++)
-      for (let y = lat2y(b.getNorth(), z); y <= lat2y(b.getSouth(), z); y++)
-        urls.push(`https://${"abc"[(x + y) % 3]}.tile.opentopomap.org/${z}/${x}/${y}.png`);
+  let urls: string[] = [], z0: number, z1: number;
+  if (plano) {
+    const pb = planBounds(raid, 1500);
+    if (!pb) return toast("O plano ainda não tem percurso, postos nem zonas", "warn");
+    const t = tilesFor(pb, 10, 16, 3000);
+    urls = t.map(([z, x, y]) => TOPO(z, x, y));
+    z0 = 10; z1 = Math.max(...t.map((q) => q[0]));
+  } else {
+    const b = map.getBounds();
+    z0 = Math.max(10, map.getZoom() - 1); z1 = Math.min(16, map.getZoom() + 3);
+    for (let z = z0; z <= z1; z++)
+      for (let x = lon2x(b.getWest(), z); x <= lon2x(b.getEast(), z); x++)
+        for (let y = lat2y(b.getNorth(), z); y <= lat2y(b.getSouth(), z); y++)
+          urls.push(TOPO(z, x, y));
+  }
   if (urls.length > 4000) return toast(`Área demasiado grande (${urls.length} mosaicos). Aproxime o mapa.`, "warn");
-  if (!(await ask(`Descarregar ${urls.length} mosaicos (~${Math.round(urls.length * 0.025)} MB) desta zona, níveis ${z0}–${z1}?`, "Descarregar"))) return;
+  if (!(await ask(`Descarregar ${urls.length} mosaicos (~${Math.round(urls.length * 0.025)} MB) ${plano ? "da zona do plano (1,5 km à volta)" : "desta zona"}, níveis ${z0}–${z1}?`, "Descarregar"))) return;
+  void navigator.storage?.persist?.();
   let done = 0, fail = 0;
-  const btn = $("#btnCache");
+  const btn = $(plano ? "#offMap" : "#btnCache");
+  const label = btn.textContent;
   const worker = async () => {
     while (urls.length) {
       const u = urls.pop()!;
@@ -532,8 +543,34 @@ async function cacheArea() {
     }
   };
   await Promise.all([worker(), worker(), worker()]); // poucos pedidos em paralelo: respeitar o servidor OpenTopoMap
-  btn.textContent = "Mapa offline";
+  btn.textContent = label;
   toast(`Mapa guardado: ${done - fail} mosaicos${fail ? `, ${fail} falharam` : ""}`, fail ? "warn" : "ok");
+  void offStatus();
+}
+
+// ───────────────────────────── Preparação para usar sem Internet ─────────────────────────────
+async function offStatus() {
+  if (DEMO_BUILD) { $("#offSec").hidden = true; return; }
+  const items: [boolean | null, string][] = [];
+  let app = false;
+  try {
+    const pc = await (await fetch("./precache.json", { cache: "no-store" }).catch(() => caches.match("./precache.json")))!.json() as { versao: string; ficheiros: string[] };
+    const c = await caches.open(`raidtrack-app-${pc.versao}`);
+    const falta = (await Promise.all(pc.ficheiros.map((f) => c.match(f, { ignoreSearch: true })))).filter((r) => !r).length;
+    app = falta === 0 && !!navigator.serviceWorker?.controller;
+    items.push([app, app ? "App guardada neste computador" : falta ? `App a guardar-se (${pc.ficheiros.length - falta}/${pc.ficheiros.length} ficheiros): mantenha a Internet e recarregue` : "Recarregue a página uma vez com Internet"]);
+  } catch { items.push([false, "App ainda não guardada: abra-a uma vez com Internet e recarregue"]); }
+  let n = 0;
+  try { n = (await (await caches.open("raidtrack-tiles-v1")).keys()).length; } catch { /* sem cache */ }
+  const temPlano = !!(raid.route || raid.posts?.length || raid.zones?.length);
+  items.push([n > 50 ? true : n ? null : false, n ? `Mapa: ${n} mosaicos guardados` : "Mapa ainda não guardado"]);
+  items.push([temPlano ? true : null, temPlano ? `Plano carregado${raid.name ? `: ${raid.name}` : ""}` : "Sem plano (pode abrir um ficheiro .raidtrack)"]);
+  const persist = (await navigator.storage?.persisted?.().catch(() => false)) ?? false;
+  items.push([persist ? true : null, persist ? "O browser não apaga os dados guardados" : "Armazenamento normal: o browser pode limpar o mapa se faltar espaço"]);
+  items.push(["serial" in navigator || "bluetooth" in navigator ? true : false, "serial" in navigator ? "Ligação ao rádio por USB e Bluetooth disponível" : "bluetooth" in navigator ? "Ligação ao rádio por Bluetooth disponível" : "Este browser não liga ao rádio: use Chrome ou Edge"]);
+  $("#offList").innerHTML = items.map(([ok, t]) => `<li class="${ok === true ? "ok" : ok === false ? "no" : "meh"}">${esc(t)}</li>`).join("");
+  const ready = app && n > 50 && temPlano;
+  $("#offBadge").textContent = ready ? "pronto" : "";
 }
 
 function setBase() {
@@ -786,7 +823,11 @@ $("#btnOff").onclick = () => link?.disconnect().then(() => (link = null));
 $("#btnPingAll").onclick = () => ping("all");
 $("#btnFit").onclick = fitAll;
 $("#btnBase").onclick = setBase;
-$("#btnCache").onclick = cacheArea;
+$("#btnCache").onclick = () => void cacheArea();
+$("#offMap").onclick = () => void cacheArea(true);
+$("#offCheck").onclick = () => void offStatus();
+$("#offSec").addEventListener("toggle", () => void offStatus());
+setTimeout(() => void offStatus(), 4000);
 $("#btnExport").onclick = exportRaid;
 $("#btnNew").onclick = newRaid;
 $("#btnMute").onclick = () => { muted = true; alarm(false); muted = true; };
@@ -872,7 +913,11 @@ if (!("bluetooth" in navigator)) $("#btnBle").title = "Bluetooth indisponível n
 document.body.classList.toggle("noUsb", !("serial" in navigator));
 document.body.classList.toggle("noBle", !("bluetooth" in navigator));
 
-if (!DEMO_BUILD && "serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(() => {});
+if (!DEMO_BUILD && "serviceWorker" in navigator && location.protocol !== "file:") {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+  // pede ao browser para não apagar a app e o mapa guardados (Chrome concede a apps instaladas / muito usadas)
+  void navigator.storage?.persist?.();
+}
 
 renderStatus(); renderAll(); showTab("teams"); fitAll();
 if (DEMO_BUILD) {
