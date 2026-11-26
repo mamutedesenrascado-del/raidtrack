@@ -465,7 +465,7 @@ async function sendMsg(text: string, dest: Dest) {
   const m: Msg = { t: Date.now(), from: myNum, to: dest, text, dir: "out", st: "a enviar", id: newId(), reads: {} };
   raid.msgs.push(m); renderMsgs();
   log("msg", `Base → ${nameOf(dest)}: ${text}`);
-  try { await link.sendPrivate(encodeText(m.id!, oledText(text)), dest); m.st = dest === "all" ? "enviada" : "entregue"; }
+  try { await link.sendPrivate(encodeText(m.id!, oledText(text)), dest); m.st = "enviada"; }
   catch { m.st = "falhou"; toast(`Mensagem para ${nameOf(dest)} não foi confirmada`, "warn"); }
   renderMsgs(); save();
 }

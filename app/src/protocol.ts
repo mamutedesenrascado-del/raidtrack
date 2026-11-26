@@ -11,6 +11,8 @@ export const enum MsgType {
   Zone = 0x05,
   Text = 0x06,
   Read = 0x07,
+  /** Envelope para uma só equipa, enviado a todas: [hdr][u32 destino][mensagem] (evita a PKI do Meshtastic 2.8) */
+  To = 0x08,
 }
 
 export type RaidMsg =
@@ -103,5 +105,14 @@ export function encodeRead(id: number): Uint8Array {
   const b = new Uint8Array(5);
   b.set([MAGIC, VERSION, MsgType.Read]);
   new DataView(b.buffer).setUint16(3, id, true);
+  return b;
+}
+
+/** Mete uma mensagem RaidTrack num envelope para um só nó (vai em broadcast no canal do raid) */
+export function encodeTo(node: number, inner: Uint8Array): Uint8Array {
+  const b = new Uint8Array(7 + inner.length);
+  b.set([MAGIC, VERSION, MsgType.To]);
+  new DataView(b.buffer).setUint32(3, node >>> 0, true);
+  b.set(inner, 7);
   return b;
 }

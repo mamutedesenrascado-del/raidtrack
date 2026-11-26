@@ -29,6 +29,9 @@ enum MsgType : uint8_t {
     MSG_ZONE = 0x05, // base → equipa: entrou numa zona proibida (fica no ecrã com som até OK)
     MSG_TEXT = 0x06, // base → equipa: mensagem que fica no ecrã até OK
     MSG_READ = 0x07, // equipa → base: a equipa carregou OK (confirmação de leitura)
+    // Envelope para uma só equipa, enviado em broadcast no canal do raid: [hdr][u32 nó destino][mensagem completa].
+    // Evita as mensagens diretas do Meshtastic, que no 2.8 exigem a chave pública do destino (PKI).
+    MSG_TO = 0x08,
 };
 
 enum SosFlags : uint8_t {
@@ -50,6 +53,7 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
 
   protected:
     ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
+    void handleRaid(const uint8_t *b, size_t len, NodeNum from, bool toUs);
     int32_t runOnce() override;
 
   private:

@@ -228,15 +228,24 @@ ProcessMessage RaidTrackModule::handleReceived(const meshtastic_MeshPacket &mp)
         return ProcessMessage::CONTINUE; // não é nosso — deixa passar (outros usos de PRIVATE_APP)
     }
 
-    const uint8_t *b = pl.bytes;
-    NodeNum from = getFrom(&mp);
+    handleRaid(pl.bytes, pl.size, getFrom(&mp), isToUs(&mp));
+
+    // CONTINUE: o RoutingModule tem de ver o pacote para o entregar à app (USB/BLE) da base.
+    return ProcessMessage::CONTINUE;
+}
+
+void RaidTrackModule::handleRaid(const uint8_t *b, size_t len, NodeNum from, bool toUs)
+{
+    if (len < 3 || b[0] != MAGIC || b[1] != VERSION)
+        return;
+    (void)toUs;
     char who[8];
     shortName(from, who, sizeof(who));
     char msg[64];
 
     switch (b[2]) {
     case MSG_SOS:
-        if (pl.size < 15)
+        if (len < 15)
             break;
         // Qualquer nó mostra o SOS; na base é o que interessa. A app recebe o pacote em paralelo.
         snprintf(msg, sizeof(msg), "!!! SOS %s !!!\nBat %u%%%s", who, b[13], (b[14] & FLAG_HAS_FIX) ? "" : " SEM GPS");
@@ -251,7 +260,7 @@ ProcessMessage RaidTrackModule::handleReceived(const meshtastic_MeshPacket &mp)
 
 #ifdef RAIDTRACK_ROLE_TEAM
     case MSG_SOS_ACK: {
-        if (pl.size < 9)
+        if (len < 9)
             break;
         NodeNum target = getU32(b + 3);
         uint16_t seq = getU16(b + 7);
@@ -265,24 +274,27 @@ ProcessMessage RaidTrackModule::handleReceived(const meshtastic_MeshPacket &mp)
 
     case MSG_PING:
         // PING dirigido a nós: responde já. PING geral: atraso aleatório para não colidir.
-        pingReplyAt = millis() + (isToUs(&mp) ? 100 : (uint32_t)random(500, RAIDTRACK_PING_JITTER_MS));
+        pingReplyAt = millis() + (toUs ? 100 : (uint32_t)random(500, RAIDTRACK_PING_JITTER_MS));
         break;
 
     case MSG_ZONE:
     case MSG_TEXT:
         // [hdr][u16 id][texto UTF-8, sem acentos]
-        if (pl.size < 6)
+        if (len < 6)
             break;
-        queueNotice(getU16(b + 3), b[2] == MSG_ZONE, from, (const char *)(b + 5), pl.size - 5);
+        queueNotice(getU16(b + 3), b[2] == MSG_ZONE, from, (const char *)(b + 5), len - 5);
+        break;
+
+    case MSG_TO:
+        // Mensagem para uma só equipa: só a processa o nó a quem se destina
+        if (len >= 10 && getU32(b + 3) == nodeDB->getNodeNum() && b[9] != MSG_TO)
+            handleRaid(b + 7, len - 7, from, true);
         break;
 #endif
 
     default:
         break;
     }
-
-    // CONTINUE: o RoutingModule tem de ver o pacote para o entregar à app (USB/BLE) da base.
-    return ProcessMessage::CONTINUE;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -456,7 +468,8 @@ void RaidTrackModule::noticeDone()
     // Confirmação de leitura para a base
     uint8_t b[5] = {MAGIC, VERSION, MSG_READ, 0, 0};
     putU16(b + 3, nt.id);
-    sendRaw(b, sizeof(b), nt.from, false);
+    // Broadcast no canal do raid: uma mensagem direta exigiria a chave pública da base (PKI no Meshtastic 2.8)
+    sendRaw(b, sizeof(b), NODENUM_BROADCAST, false);
     LOG_INFO("RaidTrack: aviso %u confirmado", nt.id);
 
     for (uint8_t i = 1; i < noticeCount; i++)

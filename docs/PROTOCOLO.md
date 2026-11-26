@@ -78,6 +78,17 @@ A base calcula a entrada na zona a partir da posição da equipa e envia `ZONE` 
 
 Enviado quando a equipa carrega OK na última página. A app mostra "lida HH:MM" (ou a lista das equipas que leram, se foi para todas).
 
+### `0x08` TO — envelope para uma só equipa (broadcast)
+
+| Offset | Tipo | Campo |
+|---|---|---|
+| 3 | u32 | `node` — número do nó destino |
+| 7 | … | mensagem RaidTrack completa (com o seu cabeçalho de 3 bytes) |
+
+Tudo o que a base envia a uma só equipa (mensagem, zona, PING, SOS_ACK) vai neste envelope, em broadcast no canal do raid. Só o nó indicado processa a mensagem interior. As confirmações de leitura (`0x07`) da equipa também vão em broadcast.
+
+Motivo: no Meshtastic 2.8 as mensagens diretas exigem a chave pública do destino (PKI). Sempre que um tracker é regravado com apagamento gera chave e número de nó novos, e a base recusa enviar-lhe mensagens diretas até receber o seu NodeInfo. Pelo canal do raid (AES-256 com a chave do raid) não há essa dependência.
+
 ## Botões do tracker
 
 Cada botão liga entre o GPIO e GND (pull-up interno). O instalador escolhe os pinos certos para a placa detetada.

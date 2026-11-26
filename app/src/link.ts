@@ -1,6 +1,6 @@
 // Ligação ao rádio da base. Duas implementações: rádio real (Meshtastic) e simulador.
 import { MeshDevice, Protobuf, Types } from "@meshtastic/core";
-import { PORT_PRIVATE } from "./protocol";
+import { encodeTo, PORT_PRIVATE } from "./protocol";
 import { isNative, TransportCapacitorBle } from "./transport-capacitor-ble";
 
 export type Dest = number | "all";
@@ -92,7 +92,10 @@ export async function connectRadio(how: "usb" | "ble", ev: LinkEvents): Promise<
       await settle(dev.sendText(text, to(dest), dest !== "all", 0), dest);
     },
     async sendPrivate(data, dest) {
-      await settle(dev.sendPacket(data, PORT_PRIVATE as Protobuf.Portnums.PortNum, to(dest), 0, dest !== "all", false), dest);
+      // Para uma equipa: envelope com o destino, em broadcast. O Meshtastic 2.8 recusa mensagens diretas
+      // a rádios cuja chave pública a base ainda não conhece (acontece sempre que um tracker é regravado).
+      const payload = dest === "all" ? data : encodeTo(dest, data);
+      await settle(dev.sendPacket(payload, PORT_PRIVATE as Protobuf.Portnums.PortNum, BROADCAST, 0, false, false), "all");
     },
     async disconnect() {
       await dev.disconnect();
