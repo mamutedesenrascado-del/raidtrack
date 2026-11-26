@@ -880,12 +880,12 @@ $<HTMLFormElement>("#msgForm").onsubmit = (e) => {
   const text = inp.value.trim();
   if (!text) return;
   const v = $<HTMLSelectElement>("#msgTo").value;
-  void sendMsg(text.slice(0, 200), v === "all" ? "all" : Number(v));
+  void sendMsg(text.slice(0, 200), v === "all" || !Number(v) ? "all" : Number(v));
   inp.value = "";
 };
 document.querySelectorAll<HTMLButtonElement>(".quick button").forEach((b) => (b.onclick = () => {
   const v = $<HTMLSelectElement>("#msgTo").value;
-  void sendMsg(b.textContent!, v === "all" ? "all" : Number(v));
+  void sendMsg(b.textContent!, v === "all" || !Number(v) ? "all" : Number(v));
 }));
 
 $("#btnGpx").onclick = saveGpx;

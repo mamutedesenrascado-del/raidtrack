@@ -79,13 +79,20 @@ export async function connectRadio(how: "usb" | "ble", ev: LinkEvents): Promise<
   if (how === "usb") dev.setHeartbeatInterval(60_000); // a ligação série cai ao fim de 15 min sem heartbeat
 
   const to = (d: Dest) => (d === "all" ? BROADCAST : d);
+  // Mensagens para todas (sem ACK): o rádio não devolve confirmação e a biblioteca só desiste ao fim de 60 s,
+  // dando "falhou" a algo que foi enviado. Basta esperar que o pacote chegue ao rádio sem erro imediato.
+  const settle = async (p: Promise<unknown>, dest: Dest) => {
+    if (dest !== "all") { await p; return; }
+    p.catch(() => { /* sem ACK em broadcast: o tempo-limite não é erro */ });
+    await Promise.race([p, new Promise((r) => setTimeout(r, 2000))]);
+  };
   return {
     kind: how === "usb" ? "USB" : "Bluetooth",
     async sendText(text, dest) {
-      await dev.sendText(text, to(dest), dest !== "all", 0);
+      await settle(dev.sendText(text, to(dest), dest !== "all", 0), dest);
     },
     async sendPrivate(data, dest) {
-      await dev.sendPacket(data, PORT_PRIVATE as Protobuf.Portnums.PortNum, to(dest), 0, dest !== "all");
+      await settle(dev.sendPacket(data, PORT_PRIVATE as Protobuf.Portnums.PortNum, to(dest), 0, dest !== "all", false), dest);
     },
     async disconnect() {
       await dev.disconnect();
