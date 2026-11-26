@@ -278,6 +278,7 @@ bool RaidTrackModule::kioskInput(const struct _InputEvent *ev)
     case INPUT_BROKER_UP:
     case INPUT_BROKER_LEFT:
     case INPUT_BROKER_UP_LONG:
+    case INPUT_BROKER_ALT_PRESS: // botão Cima do leitor updown1 do Meshtastic
         a = A_PREV;
         break;
     case INPUT_BROKER_DOWN:
@@ -288,7 +289,6 @@ bool RaidTrackModule::kioskInput(const struct _InputEvent *ev)
         break;
     case INPUT_BROKER_SELECT:
     case INPUT_BROKER_SELECT_LONG:
-    case INPUT_BROKER_ALT_PRESS:
         a = A_OK;
         break;
     case INPUT_BROKER_BACK:
