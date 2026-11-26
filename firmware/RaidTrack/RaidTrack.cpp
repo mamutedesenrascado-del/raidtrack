@@ -532,6 +532,11 @@ void RaidTrackModule::banner(const char *msg, uint32_t ms)
 void RaidTrackModule::buzz(uint8_t beeps, uint16_t onMs, uint16_t offMs)
 {
 #ifdef RAIDTRACK_BUZZER_PIN
+    // Na T-Beam Supreme o GPIO 2 é também o RF95_IRQ: o Meshtastic procura um SX127x ao arrancar
+    // (depois de os módulos serem criados) e deixa o pino como entrada. Repor a saída a cada aviso.
+    detachInterrupt(RAIDTRACK_BUZZER_PIN);
+    pinMode(RAIDTRACK_BUZZER_PIN, OUTPUT);
+    digitalWrite(RAIDTRACK_BUZZER_PIN, LOW);
     buzzSteps = beeps * 2;
     buzzOnMs = onMs;
     buzzOffMs = offMs;
