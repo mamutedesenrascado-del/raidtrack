@@ -81,6 +81,7 @@ class RaidTrackModule : public SinglePortModule, private concurrency::OSThread
     uint8_t noticeCount = 0;
     uint8_t noticePage = 0;
     uint32_t noticeNextBeep = 0;
+    uint32_t nodeInfoNext = 45000; // próximo anúncio de identidade (millis): o primeiro 45 s após arrancar
     uint32_t noticeNextCheck = 0;
     bool noticeOkPending = false; // OK carregado: tratar no próximo ciclo (o Meshtastic limpa o aviso depois do callback)
     void queueNotice(uint16_t id, bool zone, NodeNum from, const char *text, size_t len);

@@ -5,6 +5,7 @@
 #include "PowerFSM.h"
 #include "PowerStatus.h"
 #include "main.h"
+#include "modules/NodeInfoModule.h"
 #include "modules/PositionModule.h"
 #include <Arduino.h>
 #include <cstring>
@@ -33,6 +34,9 @@
 #endif
 #ifndef RAIDTRACK_ZONE_BEEP_MS
 #define RAIDTRACK_ZONE_BEEP_MS 8000 // alarme de zona proibida repete até OK
+#endif
+#ifndef RAIDTRACK_NODEINFO_MS
+#define RAIDTRACK_NODEINFO_MS (15 * 60 * 1000UL) // e repetir a cada 15 min (≈0,2 % de tempo de antena)
 #endif
 #ifndef RAIDTRACK_PING_JITTER_MS
 #define RAIDTRACK_PING_JITTER_MS 8000 // atraso máximo de resposta a PING geral
@@ -108,6 +112,17 @@ int32_t RaidTrackModule::runOnce()
     // Repetição do SOS até a base confirmar
     if (sosActive && !sosAcked && (int32_t)(now - sosNextRepeat) >= 0) {
         sendSos(true);
+    }
+
+    // Anúncio de identidade (nome da equipa + chave). O Meshtastic só o faz no arranque e a cada 3 h, e guarda
+    // em flash quando o fez: reiniciar menos de 30 min depois não volta a anunciar. Se a base perder esse
+    // anúncio, fica com o número do rádio em vez do código da equipa. Aqui força-se com o intervalo curto (60 s).
+    if ((int32_t)(now - nodeInfoNext) >= 0) {
+        nodeInfoNext = now + RAIDTRACK_NODEINFO_MS;
+        if (nodeInfoModule) {
+            LOG_INFO("RaidTrack: anunciar NodeInfo");
+            nodeInfoModule->sendOurNodeInfo(NODENUM_BROADCAST, false, 0, true);
+        }
     }
 
     // Resposta diferida a PING
