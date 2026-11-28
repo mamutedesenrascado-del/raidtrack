@@ -28,7 +28,7 @@ function checkKey() {
   if (ok) store.set("chave", keyIn.value.trim());
   if (!$("#keyQr").hidden) void drawQr();
   // A lista de rádios preparados é por chave: outra chave = outro raid
-  if (ok && keyId() !== shownKey) { shownKey = keyId(); renderDone(); suggestNext(); }
+  if (ok && keyId() !== shownKey) { shownKey = keyId(); renderDone(); suggestNext(); suggestApoio(); }
   return ok;
 }
 async function drawQr() {
@@ -71,8 +71,22 @@ interval.onchange = () => store.set("intervalo", interval.value);
 // ───────────── Rádio ─────────────
 const role = (): Role => (document.querySelector<HTMLInputElement>('input[name="role"]:checked')!.value as Role);
 const codeIn = $<HTMLInputElement>("#code"), nameIn = $<HTMLInputElement>("#name");
+const apoioN = $<HTMLSelectElement>("#apoioN"), pinIn = $<HTMLInputElement>("#pin");
+const randomPin = () => String(100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000));
+pinIn.value = store.get("pin") ?? randomPin();
+store.set("pin", pinIn.value);
+pinIn.oninput = () => { pinIn.value = pinIn.value.replace(/\D/g, "").slice(0, 6); if (pinIn.value.length === 6) store.set("pin", pinIn.value); };
+$("#pinNew").onclick = () => { pinIn.value = randomPin(); store.set("pin", pinIn.value); };
+apoioN.onchange = () => ($("#apoioCode").textContent = `AP${apoioN.value}`);
+/** Próximo carro livre com esta chave */
+function suggestApoio() {
+  const used = new Set(mine().filter((d) => d.role === "apoio").map((d) => d.code));
+  const n = [1, 2, 3, 4, 5, 6, 7, 8, 9].find((i) => !used.has(`AP${i}`)) ?? 1;
+  apoioN.value = String(n); $("#apoioCode").textContent = `AP${n}`;
+}
 function syncRole() {
-  $("#teamFields").hidden = role() === "base";
+  $("#teamFields").hidden = role() !== "equipa";
+  $("#apoioFields").hidden = role() !== "apoio";
   renderFw();
 }
 document.querySelectorAll<HTMLInputElement>('input[name="role"]').forEach((r) => (r.onchange = syncRole));
@@ -86,7 +100,7 @@ function keyId(): string {
 }
 let shownKey = "";
 
-interface Done { code: string; role: Role; node: string; t: number; k?: string }
+interface Done { code: string; role: Role; node: string; t: number; k?: string; pin?: string }
 let done: Done[] = [];
 try { done = JSON.parse(store.get("preparados") ?? "[]"); } catch { done = []; }
 const mine = () => done.filter((d) => d.k === keyId());
@@ -95,7 +109,7 @@ function renderDone() {
   const others = done.length - list.length;
   const fmt = (t: number) => new Date(t).toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   $("#done").innerHTML = list.length
-    ? list.slice().reverse().map((d) => `<tr><td><b>${d.code}</b></td><td>${d.role === "base" ? "Base" : "Equipa"}</td><td class="mono">${d.node}</td><td>${fmt(d.t)}</td></tr>`).join("")
+    ? list.slice().reverse().map((d) => `<tr><td><b>${d.code}</b></td><td>${d.role === "base" ? "Base" : d.role === "apoio" ? `Apoio${d.pin ? ` · PIN ${d.pin}` : ""}` : "Equipa"}</td><td class="mono">${d.node}</td><td>${fmt(d.t)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">Ainda nenhum rádio preparado com esta chave.</td></tr>`;
   $("#doneOther").textContent = others
     ? `${others} rádio${others > 1 ? "s" : ""} preparado${others > 1 ? "s" : ""} com outra chave não aparece${others > 1 ? "m" : ""} aqui: ${others > 1 ? "têm de ser configurados" : "tem de ser configurado"} outra vez (“Só configurar”) para ${others > 1 ? "comunicarem" : "comunicar"} neste raid.`
@@ -115,7 +129,7 @@ function renderFw() {
   const f = fwFile.files?.[0];
   const el = $("#fwInfo");
   if (f) el.innerHTML = `Firmware: <b>${f.name}</b> (ficheiro escolhido). O instalador confirma se serve para a placa antes de gravar.`;
-  else if (manifest) el.innerHTML = `Firmware RaidTrack <b>${manifest.version}</b> de ${new Date(manifest.built).toLocaleDateString("pt-PT")}. A placa é detetada ao ligar (${role() === "base" ? "T3-S3" : "T-Beam ou T-Beam Supreme"}) e o firmware certo é descarregado sozinho.`;
+  else if (manifest) el.innerHTML = `Firmware RaidTrack <b>${manifest.version}</b> de ${new Date(manifest.built).toLocaleDateString("pt-PT")}. A placa é detetada ao ligar (${role() === "equipa" ? "T-Beam ou T-Beam Supreme" : "T3-S3"}) e o firmware certo é descarregado sozinho.`;
   else el.innerHTML = `Não há firmware publicado neste endereço. Escolha um ficheiro <b>…factory.bin</b> ou use “Só configurar”.`;
   el.className = `hint ${!f && !manifest ? "bad" : ""}`;
 }
@@ -132,6 +146,12 @@ let pendingPlan: RadioPlan | null = null;
 function plan(): RadioPlan | null {
   if (!checkKey()) { toast("Defina primeiro a chave do raid (passo 1)", "warn"); keyIn.focus(); return null; }
   if (role() === "base") return { role: "base", code: "BASE", name: "RaidTrack Base", pskB64: keyIn.value.trim(), positionSecs: Number(interval.value) };
+  if (role() === "apoio") {
+    if (!/^\d{6}$/.test(pinIn.value)) { toast("O PIN Bluetooth tem de ter 6 algarismos", "warn"); pinIn.focus(); return null; }
+    const n = apoioN.value;
+    // "RaidTrack Apoio n" e o código APn são o que faz a app reconhecer este rádio como base (e não como equipa)
+    return { role: "apoio", code: `AP${n}`, name: `RaidTrack Apoio ${n}`, pskB64: keyIn.value.trim(), positionSecs: Number(interval.value), blePin: Number(pinIn.value) };
+  }
   const code = codeIn.value.trim();
   if (!code) { toast("Escreva o código da equipa (ex. EQ1)", "warn"); codeIn.focus(); return null; }
   return { role: "equipa", code, name: nameIn.value.trim() || code, pskB64: keyIn.value.trim(), positionSecs: Number(interval.value) };
@@ -159,12 +179,13 @@ let flashedBoard: Board | undefined;
 async function configure(port: SerialPort, p: RadioPlan) {
   const { nodeNum } = await configureRadio(port, p, log, progress, flashedBoard);
   done = done.filter((d) => !(d.k === keyId() && d.code === p.code)); // reconfigurar não duplica
-  done.push({ code: p.code, role: p.role, node: nodeNum.toString(16), t: Date.now(), k: keyId() });
+  done.push({ code: p.code, role: p.role, node: nodeNum.toString(16), t: Date.now(), k: keyId(), ...(p.blePin ? { pin: String(p.blePin) } : {}) });
   store.set("preparados", JSON.stringify(done));
   renderDone();
   label.innerHTML = `<b>${p.code} pronto.</b> Pode desligar o cabo e ligar o próximo rádio.`;
   toast(`${p.code} preparado`, "ok");
   if (p.role === "equipa") suggestNext();
+  if (p.role === "apoio") { suggestApoio(); label.innerHTML += ` PIN Bluetooth: <b>${p.blePin}</b>.`; }
 }
 
 async function run(withFlash: boolean) {
@@ -228,5 +249,6 @@ if (!("serial" in navigator)) { $("#noSerial").hidden = false; ($("#go") as HTML
 checkKey();
 renderDone();
 suggestNext();
+suggestApoio();
 syncRole();
 loadManifest().then((m) => { manifest = m; renderFw(); });

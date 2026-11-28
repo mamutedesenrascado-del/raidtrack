@@ -68,7 +68,7 @@ Sempre que o código muda no GitHub, o firmware e a app são recompilados e repu
 **Preparar os rádios (Chrome ou Edge, Windows ou Mac):**
 1. Abrir **Preparar rádios** (também há um botão na app da base).
 2. **Chave do raid:** *Gerar nova* (ou colar a existente). Fica guardada no computador; *Mostrar QR* passa-a a outro computador.
-3. Escolher **Equipa** (código EQ1, EQ2… sugerido automaticamente) ou **Base**.
+3. Escolher **Equipa** (código EQ1, EQ2… sugerido automaticamente), **Base** ou **Base de apoio** (carro: AP1, AP2…, com PIN Bluetooth fixo — ver abaixo).
 4. Ligar o rádio por USB → **Gravar e configurar** → escolher a porta. O browser grava o firmware e configura: região EU868, canal cifrado, nome, posição, botões e mensagens pré-definidas.
 5. "Pronto" → ligar o próximo rádio.
 
@@ -99,6 +99,17 @@ A app guarda-se toda no computador na primeira vez que é aberta com Internet (i
 2. Abrir ou fazer o plano; em **Plano → Usar sem Internet** carregar **Guardar mapa da zona do plano** (1,5 km à volta do percurso, postos e zonas).
 3. A lista "Usar sem Internet" mostra se está tudo pronto (app, mapa, plano, ligação ao rádio).
 4. No campo: abrir o RaidTrack (ou o endereço) sem Internet e ligar o rádio.
+
+### Várias bases: base principal + bases de apoio nos carros
+Cada carro de apoio leva um T3-S3 preparado como **Base de apoio** (código AP1, AP2…), alimentado pelo isqueiro do carro ou por uma LiPo, com antena magnética de 868 MHz no tejadilho. A app corre no telemóvel e liga por **Bluetooth** com o PIN fixo mostrado no instalador (Android: Chrome; iPhone: Bluefy). A base principal continua no PC por USB.
+
+- Todas as bases veem as posições, as mensagens das equipas e o **alarme de SOS**.
+- **Quem confirma o SOS é a base principal.** Quando confirma, o alarme pára também nos carros ("Confirmado por BASE"). No carro há **Confirmar daqui**, com pergunta de confirmação, para quando a base principal não está a ouvir ou o carro vai ao local.
+- Mensagens enviadas por uma base aparecem nas outras ("AP1 → EQ2: …").
+- Avisos automáticos ao tracker (zona proibida, zona de perigo) e **mensagens programadas** saem só da base principal, para a equipa não receber o mesmo aviso várias vezes.
+- Cada app guarda o seu registo: o relatório oficial (horas de partida/chegada, postos) é o da base principal. Abrir o mesmo ficheiro `.raidtrack` em todas antes de sair.
+- Com o rádio ligado, a app pede ao telemóvel para manter o **ecrã ligado** (se bloquear, o browser corta o Bluetooth e o alarme). Deixar o telemóvel a carregar no carro.
+- Cada base retransmite tudo o que ouve (os carros funcionam como repetidores móveis), mas isso gasta tempo de antena: com 2 ou mais bases de apoio, usar **posição a cada 2 minutos** (ver `docs/PROTOCOLO.md`).
 
 ### Antes do raid
 1. **Mapa offline:** com Internet, enquadrar a zona do raid e carregar **Mapa offline** (guarda os mosaicos OpenTopoMap da zona, até 4000 mosaicos), ou usar **Guardar mapa da zona do plano**.

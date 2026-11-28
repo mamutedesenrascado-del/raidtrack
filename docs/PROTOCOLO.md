@@ -105,5 +105,20 @@ No T-Beam Supreme, os pinos 38, 39, 21, 48 e 2 estão no conector de expansão d
 
 ## Orçamento de tempo de antena (EU868, 869,525 MHz, ciclo de trabalho 10 %)
 
-Preset `LONG_FAST`: um pacote de posição (~50 bytes) ocupa ≈ 1,3 s.
-5 equipas × 1 posição/min = 6,5 s/min ≈ **1,1 %** da hora por equipa — muito abaixo do limite. Um SOS a cada 30 s soma ≈ 2 s/min à equipa em SOS.
+Preset `LONG_FAST` (SF11, 250 kHz): um pacote de posição (~60–70 bytes no ar, com o cabeçalho Meshtastic) ocupa ≈ **0,8 s**.
+
+- **Cada tracker:** 1 posição/min ≈ 0,8 s/min ≈ **1,3 %** — muito abaixo do limite de 10 %. Um SOS a cada 30 s soma ≈ 1,2 s/min à equipa em SOS.
+- **Cada rádio que retransmite** — repetidor, base principal ou base de apoio (papel `CLIENT`/`ROUTER`) — volta a emitir o que ouve de todas as equipas que não ouviu já retransmitido por outro. No pior caso: N equipas × 0,8 s por intervalo de posição. Acima de 10 % o Meshtastic deixa de transmitir até a média da hora baixar, e perdem-se posições.
+- O canal é partilhado: cada base ou repetidor a mais acrescenta outra cópia de cada pacote e aumenta as colisões.
+
+Limite prático para o rádio que mais retransmite (só posições; telemetria, NodeInfo e SOS gastam o resto da margem):
+
+| Posição das equipas | Equipas por rádio a retransmitir (≤ ~8 %) |
+|---|---|
+| 60 s | até ~6 |
+| 120 s | até ~12 |
+| 180 s | até ~18 |
+
+Com bases de apoio nos carros ou repetidores, usar **120 s** salvo raids com poucas equipas.
+
+O pedido **Localizar** continua a dar a posição imediata quando é preciso.

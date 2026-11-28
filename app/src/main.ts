@@ -3,7 +3,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { connectRadio, type Dest, type Link, type LinkEvents, type LinkStatus } from "./link";
-import { decode, encodePing, encodeSosAck, encodeText, encodeZone } from "./protocol";
+import { decode, encodePing, encodeSosAck, encodeText, encodeZone, FROM_BASE, isApoioNode, isBaseNode, type RaidMsg } from "./protocol";
 import { adherence, clip, dist, distToRoute, fmtDur, fmtKm, inPolygon, oledText, walked, type LatLon } from "./geo";
 import { DEMO_PLAN, startSim } from "./sim";
 import { migrate, passedPost, distToPolygon, planBounds, planOf, postEtas, tilesFor, TOPO } from "./plan";
@@ -25,6 +25,9 @@ let raid: Raid = (DEMO_BUILD ? null : load()) ?? migrate({ started: Date.now(), 
 let link: Link | null = null;
 let linkKind = ""; // conhecido antes de a ligação terminar (o estado "ligado" chega antes de connectRadio devolver)
 let myNum = 0;
+/** código do rádio ligado a esta app: BASE (principal) ou AP1…AP9 (base de apoio num carro) */
+let myShort = "";
+const isApoio = () => isApoioNode(myShort);
 let status: LinkStatus = "desligado";
 let selected: number | null = null;
 
@@ -37,7 +40,8 @@ function save() {
   saveTimer = window.setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(raid)); } catch { /* armazenamento indisponível */ } }, 1500);
 }
 
-const teams = () => Object.values(raid.teams).filter((t) => t.num !== myNum);
+const teams = () => Object.values(raid.teams).filter((t) => t.num !== myNum && !t.base);
+const isBase = (num: number) => !!raid.teams[num]?.base;
 function team(num: number): Team {
   let t = raid.teams[num];
   if (!t) {
@@ -46,7 +50,8 @@ function team(num: number): Team {
   }
   return t;
 }
-const nameOf = (num: number | "all") => num === "all" ? "Todas" : num === myNum ? "Base" : raid.teams[num]?.short ?? num.toString(16).slice(-4);
+const myLabel = () => (isApoio() ? myShort : "Base");
+const nameOf = (num: number | "all") => num === "all" ? "Todas" : num === myNum ? myLabel() : raid.teams[num]?.short ?? num.toString(16).slice(-4);
 function log(kind: LogEv["kind"], text: string) { raid.log.push({ t: Date.now(), kind, text }); renderLog(); save(); }
 
 // ───────────────────────────── DOM ─────────────────────────────
@@ -278,7 +283,7 @@ function renderTeams() {
 function renderMsgs() {
   const box = $("#msgs");
   box.innerHTML = raid.msgs.slice(-200).map((m) => {
-    const who = m.dir === "in" ? nameOf(m.from) : `Base → ${nameOf(m.to)}`;
+    const who = m.dir === "in" ? (isBase(m.from) ? `${nameOf(m.from)} → ${nameOf(m.to)}` : nameOf(m.from)) : `${myLabel()} → ${nameOf(m.to)}`;
     const c = m.dir === "in" ? raid.teams[m.from]?.color ?? "#64748b" : "#475569";
     const reads = Object.entries(m.reads ?? {});
     const readTxt = reads.length ? (m.to === "all" ? `lida: ${reads.map(([n]) => nameOf(Number(n))).join(", ")}` : `lida ${hhmm(reads[0][1])}`) : "";
@@ -298,8 +303,11 @@ function renderLog() {
 function renderStatus(detail?: string) {
   const el = $("#status");
   el.className = `pill ${status === "ligado" ? "on" : status === "a ligar" ? "wait" : "off"}`;
-  el.textContent = status === "ligado" ? `Ligado · ${link?.kind ?? linkKind}` : status === "a ligar" ? detail ?? "A ligar…" : "Desligado";
+  el.textContent = status === "ligado" ? `Ligado · ${link?.kind ?? linkKind}${isApoio() ? ` · Apoio ${myShort}` : ""}` : status === "a ligar" ? detail ?? "A ligar…" : "Desligado";
+  el.title = isApoio() ? "Base de apoio: vê tudo e recebe o alarme de SOS; a confirmação do SOS cabe à base principal" : "";
   document.body.classList.toggle("connected", status === "ligado");
+  document.body.classList.toggle("apoio", isApoio());
+  void keepAwake(status === "ligado");
 }
 
 function renderSos() {
@@ -312,7 +320,9 @@ function renderSos() {
       <div class="sosHead"><span class="sosIcon">SOS</span><div><b>${esc(t.short)}</b> ${esc(t.long)}<br>
         <small>desde ${hhmm(s.since)} · bateria ${s.bat > 100 ? "USB" : s.bat + "%"} · ${s.lat !== null ? `${s.lat.toFixed(5)}, ${s.lon!.toFixed(5)}${raid.base ? " · " + distBrg(s.lat, s.lon!) : ""}` : "SEM POSIÇÃO GPS — usar última conhecida"}</small></div></div>
       <div class="sosBtns">
-        ${s.acked ? `<span class="ackd">Confirmação enviada ${hhmm(s.ackAt!)}</span><button data-act="resolve">Resolvido</button>` : `<button class="primary" data-act="ack">Recebido — avisar equipa</button>`}
+        ${s.acked ? `<span class="ackd">${s.ackBy ? `Confirmado por ${esc(s.ackBy)}` : "Confirmação enviada"} ${hhmm(s.ackAt!)}</span><button data-act="resolve">Resolvido</button>`
+          : isApoio() ? `<span class="ackd wait">A aguardar confirmação da base principal</span><button data-act="ack">Confirmar daqui</button>`
+          : `<button class="primary" data-act="ack">Recebido — avisar equipa</button>`}
         <button data-act="center">Ver no mapa</button>
         ${s.lat !== null ? `<button data-act="copy">Copiar coordenadas</button>` : ""}
       </div></div>`;
@@ -350,12 +360,18 @@ const events: LinkEvents = {
   },
   myNode(n) { myNum = n; renderTeams(); },
   node(n, short, long) {
-    if (n === myNum) return;
+    if (n === myNum) {
+      if (short && short !== myShort) { myShort = short; renderStatus(); renderSos(); renderMsgs(); }
+      return;
+    }
     const t = team(n); t.short = short || t.short; t.long = long || t.long;
+    const wasBase = !!t.base;
+    t.base = isBaseNode(t.short, t.long) || wasBase;
+    if (t.base && !wasBase) dropBaseNode(t);
     renderTeams(); renderMsgs(); drawTeam(t); save();
   },
   position(n, lat, lon, when) {
-    if (n === myNum) return;
+    if (n === myNum || isBase(n)) return;
     const t = team(n);
     // Ao ligar, o rádio da base devolve a última posição que conhece de cada nó, que pode ser de dias antes:
     // serve para pôr a equipa no mapa, mas não entra no rasto nem nos alertas de zona.
@@ -378,7 +394,7 @@ const events: LinkEvents = {
     drawTeam(t); renderTeams(); save();
   },
   battery(n, pct) {
-    if (n === myNum) return;
+    if (n === myNum || isBase(n)) return;
     const t = team(n); t.bat = pct;
     const lim = raid.alerts?.bat ?? 20;
     if (lim > 0 && pct <= lim) raiseAlert(t, "bateria", `${t.short}: bateria baixa (${pct}%)`);
@@ -386,7 +402,7 @@ const events: LinkEvents = {
     renderTeams(); save();
   },
   radio(n, snr, rssi, hops) {
-    if (n === myNum) return;
+    if (n === myNum || isBase(n)) return;
     const t = team(n); t.snr = snr; t.rssi = rssi; t.hops = hops; t.heard = Date.now();
     if (t.alerts?.silencio) { clearAlert(t, "silencio", `${t.short} voltou a dar sinal`); renderTeams(); }
     t.radioRx = Date.now(); addCov(t);
@@ -403,6 +419,8 @@ const events: LinkEvents = {
   priv(from, data, when) {
     const m = decode(data);
     if (!m || from === myNum) return;
+    // Só as bases enviam confirmações, PINGs e mensagens: é outra base (principal ou apoio) a falar com as equipas
+    if (FROM_BASE.has(m.type) || isBase(from)) return fromOtherBase(from, m, when);
     const t = team(from); t.heard = when;
     if (m.type === "sos") {
       const isNew = !t.sos || t.sos.seq !== m.seq;
@@ -412,8 +430,8 @@ const events: LinkEvents = {
         if (m.lat !== null) map.setView([m.lat, m.lon!], Math.max(map.getZoom(), 15));
       } else {
         Object.assign(t.sos!, { last: when, bat: m.battery, ...(m.lat !== null ? { lat: m.lat, lon: m.lon } : {}) });
-        // A equipa repete enquanto não recebe a confirmação: reenviar se já confirmámos
-        if (t.sos!.acked) void sendAck(t, true);
+        // A equipa repete enquanto não recebe a confirmação: reenviar se fomos nós a confirmar
+        if (t.sos!.acked && !t.sos!.ackBy) void sendAck(t, true);
       }
       if (m.lat !== null) { t.lat = m.lat; t.lon = m.lon!; t.posAt = when; t.track.push([m.lat, m.lon!, when]); }
     } else if (m.type === "sosCancel") {
@@ -432,11 +450,61 @@ const events: LinkEvents = {
   },
 };
 
+/** O que outra base enviou às equipas: confirmação de SOS (pára o alarme aqui também) e mensagens */
+function fromOtherBase(from: number, m: RaidMsg, when: number) {
+  const b = team(from);
+  if (!b.base) { b.base = true; dropBaseNode(b); }
+  const who = b.short;
+  const inner = m.type === "to" ? m.inner : m;
+  const dest: number | "all" = m.type === "to" ? m.node : "all";
+  if (!inner) return;
+  if (inner.type === "sosAck") {
+    const t = raid.teams[inner.node];
+    if (t?.sos && t.sos.seq === inner.seq && !t.sos.acked) {
+      Object.assign(t.sos, { acked: true, ackAt: when, ackBy: who });
+      log("sos", `SOS de ${t.short} confirmado por ${who}`);
+      toast(`${who} confirmou o SOS de ${t.short}`, "ok");
+      renderSos(); renderTeams(); drawTeam(t); save();
+    }
+  } else if (inner.type === "text" || inner.type === "zone") {
+    // Mensagens em broadcast também são repetidas pelas outras bases (alertas de zona): registar só uma vez
+    if (raid.msgs.some((x) => x.from === from && x.id === inner.id)) return;
+    raid.msgs.push({ t: when, from, to: dest, text: inner.text, dir: "in", id: inner.id });
+    log("msg", `${who} → ${nameOf(dest)}: ${inner.text}`);
+    renderMsgs(); save();
+  }
+}
+
+/** Um nó que afinal é uma base sai dos cartões e do mapa */
+function dropBaseNode(t: Team) {
+  markers.get(t.num)?.remove(); markers.delete(t.num);
+  tracks.get(t.num)?.remove(); tracks.delete(t.num);
+  t.track = []; t.lat = t.lon = undefined; t.sos = undefined; t.alerts = {};
+  renderTeams(); renderSos(); save();
+}
+
+// ───────────── Ecrã sempre ligado ─────────────
+// No telemóvel, se o ecrã bloquear o browser corta o Bluetooth e o alarme de SOS deixa de tocar.
+let wakeLock: { release(): Promise<void> } | null = null;
+let wantAwake = false;
+async function keepAwake(on: boolean) {
+  wantAwake = on;
+  const wl = (navigator as unknown as { wakeLock?: { request(t: "screen"): Promise<{ release(): Promise<void>; addEventListener(e: string, f: () => void): void }> } }).wakeLock;
+  if (!wl) return;
+  try {
+    if (on && !wakeLock && document.visibilityState === "visible") {
+      const l = await wl.request("screen");
+      wakeLock = l; l.addEventListener("release", () => { if (wakeLock === l) wakeLock = null; });
+    } else if (!on && wakeLock) { const l = wakeLock; wakeLock = null; await l.release(); }
+  } catch { /* sem permissão (poupança de bateria): segue sem */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && wantAwake) void keepAwake(true); });
+
 async function sendAck(t: Team, resend = false) {
   if (!link || !t.sos) return toast("Rádio desligado — não é possível confirmar", "warn");
   try {
     await link.sendPrivate(encodeSosAck(t.num, t.sos.seq), t.num);
-    if (!resend) { t.sos.acked = true; t.sos.ackAt = Date.now(); log("sos", `Confirmação de SOS enviada a ${t.short}`); }
+    if (!resend) { t.sos.acked = true; t.sos.ackAt = Date.now(); t.sos.ackBy = undefined; log("sos", `${myLabel()}: confirmação de SOS enviada a ${t.short}`); }
   } catch {
     toast(`Confirmação para ${t.short} não chegou — tente de novo`, "warn");
     if (!resend) log("sos", `Falhou a confirmação de SOS para ${t.short}`);
@@ -464,7 +532,7 @@ async function sendMsg(text: string, dest: Dest) {
   // Vai como mensagem RaidTrack: fica no ecrã do tracker até a equipa carregar OK, e volta a confirmação de leitura
   const m: Msg = { t: Date.now(), from: myNum, to: dest, text, dir: "out", st: "a enviar", id: newId(), reads: {} };
   raid.msgs.push(m); renderMsgs();
-  log("msg", `Base → ${nameOf(dest)}: ${text}`);
+  log("msg", `${myLabel()} → ${nameOf(dest)}: ${text}`);
   try { await link.sendPrivate(encodeText(m.id!, oledText(text)), dest); m.st = "enviada"; }
   catch { m.st = "falhou"; toast(`Mensagem para ${nameOf(dest)} não foi confirmada`, "warn"); }
   renderMsgs(); save();
@@ -607,7 +675,8 @@ function checkZones(t: Team) {
       log("zona", `${t.short} ${d === 0 ? "entrou na" : `está a ${Math.round(d)} m da`} zona de perigo "${z.name}"`);
       toast(`${t.short} perto da zona de perigo "${z.name}"`, "warn");
       beep(600, 200); setTimeout(() => beep(600, 200), 300);
-      if (z.notifyTracker) void sendMsg(`ATENCAO: ${z.name}${z.notes ? `. ${z.notes}` : ""}`, t.num);
+      // Avisos automáticos ao tracker só pela base principal (senão a equipa recebia um por cada base)
+      if (z.notifyTracker && !isApoio()) void sendMsg(`ATENCAO: ${z.name}${z.notes ? `. ${z.notes}` : ""}`, t.num);
     } else if (d > lim + 20 && near) {
       delete t.nearDanger[z.id];
       log("zona", `${t.short} afastou-se da zona de perigo "${z.name}"`);
@@ -631,7 +700,7 @@ function checkZones(t: Team) {
 }
 async function sendZoneAlert(t: Team, z: Zone) {
   const st = t.inZones?.[z.id];
-  if (!st || !link) return;
+  if (!st || !link || isApoio()) return;
   st.sentAt = Date.now();
   try { await link.sendPrivate(encodeZone(st.id, oledText(`${z.name}. Saiam ja desta zona!`)), t.num); }
   catch { toast(`O aviso de zona para ${t.short} não foi confirmado — volta a tentar`, "warn"); st.sentAt = Date.now() - ZONE_REPEAT_MS + 60_000; }
@@ -676,8 +745,8 @@ function watchTick() {
     else if (atPost || atBase) clearAlert(t, "parada");
     if (a.offMin > 0 && raid.route && t.offSince && now - Math.max(t.offSince, t0) > a.offMin * MIN) raiseAlert(t, "desvio", `${t.short}: fora do percurso há ${ago(t.offSince)}`);
   }
-  // mensagens programadas
-  for (const m of raid.sched ?? []) {
+  // mensagens programadas (só a base principal as envia)
+  for (const m of isApoio() ? [] : raid.sched ?? []) {
     if (m.sent) continue;
     let at = fromTime(m.at)!;
     if (at < raid.started - 60_000) at += 86_400_000; // raid que passa a meia-noite
@@ -869,7 +938,11 @@ $("#sos").addEventListener("click", (e) => {
   const act = (e.target as HTMLElement).closest<HTMLElement>("button")?.dataset.act;
   if (!card || !act) return;
   const t = raid.teams[Number(card.dataset.num)];
-  if (act === "ack") void sendAck(t);
+  if (act === "ack") {
+    if (!isApoio()) void sendAck(t);
+    else void ask(`A base principal ainda não confirmou o SOS de ${t.short}. Confirmar a partir de ${myShort}? A equipa vê “BASE RECEBEU O SOS” — só faça isto se vai mesmo dar resposta ou se a base principal não está a ouvir.`, "Confirmar daqui")
+      .then((ok) => { if (ok) void sendAck(t); });
+  }
   if (act === "center") center(t.num);
   if (act === "copy" && t.sos?.lat != null) navigator.clipboard?.writeText(`${t.sos.lat.toFixed(6)}, ${t.sos.lon!.toFixed(6)}`).then(() => toast("Coordenadas copiadas", "ok"));
   if (act === "resolve") void ask(`Marcar o SOS de ${t.short} como resolvido?`, "Resolvido").then((ok) => { if (!ok || !t.sos) return; t.sos = undefined; log("sos", `SOS de ${t.short} resolvido`); renderSos(); renderTeams(); drawTeam(t); save(); });

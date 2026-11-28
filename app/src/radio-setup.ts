@@ -5,11 +5,19 @@ import { MeshDevice, Protobuf, Types } from "@meshtastic/core";
 import { TransportWebSerial } from "@meshtastic/transport-web-serial";
 import { ESPLoader, Transport } from "esptool-js";
 
-export type Role = "base" | "equipa";
+/** base = base principal (PC por USB); apoio = base de apoio num carro (telemóvel por Bluetooth) */
+export type Role = "base" | "apoio" | "equipa";
 /** Placas suportadas. A placa é detetada sozinha (chip e tamanho da memória, ou modelo indicado pelo rádio). */
 export type Board = "tbeam" | "supreme" | "t3s3";
 export const BOARD_NAMES: Record<Board, string> = { tbeam: "T-Beam (ESP32)", supreme: "T-Beam Supreme (ESP32-S3)", t3s3: "T3-S3" };
-export const BOARD_ROLE: Record<Board, Role> = { tbeam: "equipa", supreme: "equipa", t3s3: "base" };
+export const BOARD_ROLE: Record<Board, "base" | "equipa"> = { tbeam: "equipa", supreme: "equipa", t3s3: "base" };
+/** Base principal e bases de apoio usam a mesma placa (T3-S3) e o mesmo firmware */
+export const boardFits = (b: Board, r: Role) => BOARD_ROLE[b] === (r === "equipa" ? "equipa" : "base");
+const ROLE_NAMES: Record<Role, string> = { base: "Base", apoio: "Base de apoio", equipa: "Equipa" };
+function wrongBoard(b: Board, r: Role, tail: string): Error {
+  return new Error(`A placa ligada é um ${BOARD_NAMES[b]}, que no RaidTrack é ${BOARD_ROLE[b] === "base" ? "a Base ou uma Base de apoio" : "uma Equipa"}, ` +
+    `mas escolheu “${ROLE_NAMES[r]}”. Mude a escolha no passo 2.${tail}`);
+}
 
 export interface RadioPlan {
   role: Role;
@@ -17,6 +25,8 @@ export interface RadioPlan {
   name: string; // nome longo
   pskB64: string; // chave do raid (32 bytes em base64)
   positionSecs: number; // intervalo de posição das equipas
+  /** PIN Bluetooth fixo (6 dígitos) para ligar o telemóvel sem ler o ecrã do rádio; sem PIN = PIN aleatório no ecrã */
+  blePin?: number;
 }
 
 export const CANAL = "RaidTrack";
@@ -90,10 +100,7 @@ export async function flashFactory(port: SerialPort, role: Role, getImage: (b: B
       board = sizeCode >= 0x17 ? "supreme" : "t3s3";
     } else throw new Error(`Placa não suportada (${chip}). Nada foi gravado.`);
     log(`Placa: ${BOARD_NAMES[board]}`);
-    if (BOARD_ROLE[board] !== role) {
-      throw new Error(`A placa ligada é um ${BOARD_NAMES[board]}, que no RaidTrack é ${BOARD_ROLE[board] === "base" ? "a Base" : "uma Equipa"}, ` +
-        `mas escolheu “${role === "base" ? "Base" : "Equipa"}”. Mude a escolha no passo 2. Nada foi gravado.`);
-    }
+    if (!boardFits(board, role)) throw wrongBoard(board, role, " Nada foi gravado.");
     const image = await getImage(board);
     log(`Imagem: ${(image.length / 1024).toFixed(0)} KB`);
     // Recusa gravar um firmware feito para outro chip (ex.: ficheiro escolhido à mão errado)
@@ -175,7 +182,9 @@ export function buildSettings(plan: RadioPlan, psk: Uint8Array, board: Board = "
     out.push(
       ["Sem GPS", { kind: "config", msg: cfg({ case: "position", value: create(C.Config_PositionConfigSchema, { gpsMode: C.Config_PositionConfig_GpsMode.NOT_PRESENT }) }) }],
       ["Bluetooth", { kind: "config", msg: cfg({ case: "bluetooth", value: create(C.Config_BluetoothConfigSchema, {
-        enabled: true, mode: C.Config_BluetoothConfig_PairingMode.RANDOM_PIN }) }) }],
+        enabled: true,
+        ...(plan.blePin ? { mode: C.Config_BluetoothConfig_PairingMode.FIXED_PIN, fixedPin: plan.blePin } : { mode: C.Config_BluetoothConfig_PairingMode.RANDOM_PIN }),
+      }) }) }],
     );
   }
   out.push(["Canal cifrado", { kind: "channel", msg: create(Protobuf.Channel.ChannelSchema, {
@@ -287,11 +296,9 @@ export async function configureRadio(port: SerialPort, plan: RadioPlan, log: Log
       if (s.region !== EU868) throw new Error("A região não ficou gravada. Tente “Só configurar” outra vez.");
     }
 
-    const board = HW_BOARD[s.hwModel] ?? boardHint ?? (plan.role === "base" ? "t3s3" : "tbeam");
+    const board = HW_BOARD[s.hwModel] ?? boardHint ?? (plan.role === "equipa" ? "tbeam" : "t3s3");
     log(`Placa: ${BOARD_NAMES[board]}${HW_BOARD[s.hwModel] ? "" : " (presumida)"}`);
-    if (BOARD_ROLE[board] !== plan.role) {
-      throw new Error(`O rádio ligado é um ${BOARD_NAMES[board]}, que no RaidTrack é ${BOARD_ROLE[board] === "base" ? "a Base" : "uma Equipa"}. Mude a escolha no passo 2.`);
-    }
+    if (!boardFits(board, plan.role)) throw wrongBoard(board, plan.role, "");
     settings = buildSettings(plan, psk, board);
     for (let i = 0; i < settings.length; i++) {
       const [label, x] = settings[i];
