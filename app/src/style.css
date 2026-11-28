@@ -177,7 +177,10 @@ a.btn:hover { border-color: var(--brand-2); }
 .field > span { font-weight: 600; }
 .grid2 { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; }
 .grid2[hidden] { display: none; }
-.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.pinRow { display: flex; gap: 6px; }
+.pinRow input { flex: 1; }
+.span2 { grid-column: 1 / -1; margin: 0; }
 .seg label { cursor: pointer; }
 .seg input { position: absolute; opacity: 0; pointer-events: none; }
 .seg label span { display: grid; gap: 2px; border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; }
@@ -312,3 +315,4 @@ body:has(#replay:not([hidden])) #toasts { bottom: 84px; }
 .checks li.ok::before { content: "✓"; color: var(--ok); }
 .checks li.no::before { content: "✗"; color: var(--bad); }
 .checks li.meh::before { content: "•"; color: var(--warn); }
+.ackd.wait { color: var(--muted); font-weight: 500; }

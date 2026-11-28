@@ -4,10 +4,14 @@ import type { LatLon } from "./geo";
 
 export type Pt = [number, number, number]; // lat, lon, t(ms)
 
-export interface Sos { seq: number; lat: number | null; lon: number | null; bat: number; since: number; last: number; acked: boolean; ackAt?: number }
+export interface Sos { seq: number; lat: number | null; lon: number | null; bat: number; since: number; last: number; acked: boolean; ackAt?: number;
+  /** confirmado por outra base (código, ex. "BASE" ou "AP1"); vazio = confirmado por esta */
+  ackBy?: string }
 
 export interface Team {
   num: number; short: string; long: string; color: string;
+  /** é um rádio de base (principal ou de apoio), não uma equipa: não aparece nos cartões nem no mapa */
+  base?: boolean;
   lat?: number; lon?: number; posAt?: number; heard?: number;
   bat?: number; snr?: number; rssi?: number; hops?: number | null;
   track: Pt[]; sos?: Sos;

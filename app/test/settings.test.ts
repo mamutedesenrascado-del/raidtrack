@@ -6,8 +6,15 @@ import { buildSettings, keyBytes, newKey } from "../src/radio-setup";
 
 const psk = keyBytes(newKey())!;
 let n = 0;
-for (const role of ["equipa", "base"] as const) {
-  const s = buildSettings({ role, code: role === "base" ? "BASE" : "EQ1", name: "Equipa 1", pskB64: "", positionSecs: 120 }, psk, role === "base" ? "t3s3" : "supreme");
+for (const role of ["equipa", "base", "apoio"] as const) {
+  const s = buildSettings({ role, code: role === "base" ? "BASE" : role === "apoio" ? "AP1" : "EQ1", name: "Equipa 1", pskB64: "", positionSecs: 120,
+    ...(role === "apoio" ? { blePin: 482913 } : {}) }, psk, role === "equipa" ? "supreme" : "t3s3");
+  if (role === "apoio") {
+    const bt = s.find(([l]) => l === "Bluetooth")![1] as any;
+    const v = bt.msg.payloadVariant.value;
+    if (v.mode !== Protobuf.Config.Config_BluetoothConfig_PairingMode.FIXED_PIN || v.fixedPin !== 482913) throw new Error("apoio: PIN Bluetooth fixo não ficou na configuração");
+    console.log("✓ apoio: Bluetooth com PIN fixo 482913");
+  }
   for (const [label, x] of s) {
     // Mensagem Admin completa, como o rádio a recebe
     const variant = { owner: "setOwner", config: "setConfig", module: "setModuleConfig", canned: "setCannedMessageModuleMessages", channel: "setChannel" }[x.kind];

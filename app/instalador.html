@@ -34,9 +34,9 @@
       <div id="keyQr" class="qr" hidden><canvas id="qr" aria-label="Código QR da chave"></canvas><p class="hint">Leia com o telemóvel para passar a chave a outro computador.</p></div>
       <label class="field"><span>Posição das equipas</span>
         <select id="interval">
-          <option value="60">A cada 1 minuto (até ~15 equipas)</option>
-          <option value="120">A cada 2 minutos (até ~30 equipas)</option>
-          <option value="180">A cada 3 minutos (mais de 30 equipas)</option>
+          <option value="60">A cada 1 minuto (até ~6 equipas)</option>
+          <option value="120">A cada 2 minutos (até ~12 equipas, ou com bases de apoio)</option>
+          <option value="180">A cada 3 minutos (mais de 12 equipas)</option>
         </select>
       </label>
     </section>
@@ -45,7 +45,17 @@
       <h2 id="h2"><span class="n">2</span> Rádio a preparar</h2>
       <div class="seg" role="radiogroup" aria-label="Tipo de rádio">
         <label><input type="radio" name="role" value="equipa" checked /> <span><b>Equipa</b><small>T-Beam ou T-Beam Supreme</small></span></label>
-        <label><input type="radio" name="role" value="base" /> <span><b>Base</b><small>T3-S3 ligado à app</small></span></label>
+        <label><input type="radio" name="role" value="base" /> <span><b>Base</b><small>T3-S3 ligado ao PC por USB</small></span></label>
+        <label><input type="radio" name="role" value="apoio" /> <span><b>Base de apoio</b><small>T3-S3 num carro, telemóvel por Bluetooth</small></span></label>
+      </div>
+      <div id="apoioFields" class="grid2" hidden>
+        <label class="field"><span>N.º do carro</span>
+          <select id="apoioN"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option></select>
+        </label>
+        <label class="field"><span>PIN Bluetooth (6 algarismos)</span>
+          <div class="pinRow"><input id="pin" class="mono" inputmode="numeric" maxlength="6" autocomplete="off" /><button id="pinNew" type="button">Gerar</button></div>
+        </label>
+        <p class="hint span2">Fica com o código <b id="apoioCode">AP1</b>. O telemóvel pede este PIN na primeira ligação por Bluetooth. Na app, uma base de apoio vê tudo e recebe o alarme de SOS, mas quem confirma o SOS é a base principal (o apoio só confirma se o operador insistir).</p>
       </div>
       <div id="teamFields" class="grid2">
         <label class="field"><span>Código (máx. 4)</span><input id="code" maxlength="4" autocomplete="off" placeholder="EQ1" /></label>

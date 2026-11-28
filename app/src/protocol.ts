@@ -21,7 +21,18 @@ export type RaidMsg =
   | { type: "sosCancel"; seq: number }
   | { type: "ping" }
   | { type: "zone" | "text"; id: number; text: string }
-  | { type: "read"; id: number };
+  | { type: "read"; id: number }
+  /** Envelope para uma só equipa. As outras bases também o ouvem (vai em broadcast): é assim que sabem o que uma base enviou */
+  | { type: "to"; node: number; inner: RaidMsg | null };
+
+/** Mensagens que só uma base envia: se chegam de um nó, esse nó é uma base (principal ou de apoio) */
+export const FROM_BASE: ReadonlySet<RaidMsg["type"]> = new Set(["sosAck", "ping", "zone", "text", "to"]);
+
+/** Rádios de base, pelo nome que o instalador lhes dá: BASE / "RaidTrack Base" e AP1…AP9 / "RaidTrack Apoio n" */
+export function isBaseNode(short: string, long: string): boolean {
+  return /^(BASE|AP\d)$/.test(short) || /^RaidTrack (Base|Apoio)\b/.test(long);
+}
+export const isApoioNode = (short: string) => /^AP\d$/.test(short);
 
 export function decode(b: Uint8Array): RaidMsg | null {
   if (b.length < 3 || b[0] !== MAGIC || b[1] !== VERSION) return null;
@@ -54,6 +65,9 @@ export function decode(b: Uint8Array): RaidMsg | null {
     case MsgType.Read:
       if (b.length < 5) return null;
       return { type: "read", id: v.getUint16(3, true) };
+    case MsgType.To:
+      if (b.length < 10 || b[9] === MsgType.To) return null;
+      return { type: "to", node: v.getUint32(3, true), inner: decode(b.subarray(7)) };
   }
   return null;
 }
